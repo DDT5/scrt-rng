@@ -1,0 +1,2 @@
+# SECRET ORACLE - RNG
+Readme WIP
