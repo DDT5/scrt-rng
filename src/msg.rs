@@ -1,4 +1,4 @@
-use cosmwasm_std::HumanAddr;
+use cosmwasm_std::{HumanAddr, Binary};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +23,9 @@ pub enum HandleMsg {
     // RnInt {entropy: i32},
     // RnChar {entropy: char},
 
-    Callback {entropy: String, callback_code_hash: String, contract_addr: String},
+    CallbackRn {entropy: String, cb_msg: Binary, callback_code_hash: String, contract_addr: String},
+
+    ReceiveRn {rn: [u8; 32], cb_msg: Binary},
 
     GenerateViewingKey {
         entropy: String,
@@ -37,6 +39,7 @@ pub enum HandleAnswer {
     Rn {
         rn: [u8; 32],
         // blocktime: u64
+        // cb_msg: Binary,
     },
     GenerateViewingKey {
         key: ViewingKey,

@@ -6,7 +6,7 @@ use cosmwasm_std::{
     to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, debug_print,
     StdError, StdResult, QueryResult,
     Storage, BankMsg, Coin, CosmosMsg, Uint128,
-    HumanAddr
+    HumanAddr, log
 };
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer};
@@ -14,7 +14,7 @@ use crate::state::{State, load_seed, save_seed, write_viewing_key, read_viewing_
 use crate::viewing_key::{ViewingKey}; //self, 
 use crate::viewing_key::VIEWING_KEY_SIZE;
 
-use secret_toolkit::utils::{pad_handle_result, pad_query_result, Query}; //, HandleCallback, InitCallback, 
+use secret_toolkit::utils::{pad_handle_result, pad_query_result, Query, HandleCallback}; //, InitCallback, 
 use secret_toolkit::crypto::{sha_256};  //Prng
 
 // use serde_json_wasm as serde_json;
@@ -33,6 +33,19 @@ pub const MIN_FEE: Uint128 = Uint128(100_000); /* 1mn uscrt = 1 SCRT */
 // Enums for callback
 /////////////////////////////////////////////////////////////////////////////////
 
+
+// Calling handle in another contract
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiveRnHandleMsg {
+    ReceiveRn {rn: [u8; 32], cb_msg: Binary},
+}
+
+impl HandleCallback for ReceiveRnHandleMsg {
+    const BLOCK_SIZE: usize = BLOCK_SIZE;
+}
+
+// Calling query in another contract
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryRnMsg {
@@ -47,7 +60,6 @@ impl Query for QueryRnMsg {
 pub struct RnOutput {
     pub rn: [u8; 32],
 }
-
 
 #[derive(Serialize, Deserialize, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -98,9 +110,13 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
         // HandleMsg::RnInt {entropy} => call_rn(deps, env, entropy),
         // HandleMsg::RnChar {entropy} => call_rn(deps, env, entropy),
 
-        HandleMsg::Callback {
-            entropy, callback_code_hash, contract_addr
-        } => callback_rn(deps, env, entropy, callback_code_hash, contract_addr),
+        HandleMsg::CallbackRn {
+            entropy, cb_msg, callback_code_hash, contract_addr
+        } => try_callback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
+
+        HandleMsg::ReceiveRn {
+            rn, cb_msg
+        } => try_receive_rn(deps, env, rn, cb_msg),
 
         HandleMsg::GenerateViewingKey {entropy, .. } => try_generate_viewing_key(deps, env, entropy),
     };
@@ -219,6 +235,7 @@ pub fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
         rn: rn_output,
         // Debugging - Remove blocktime eventually
         // blocktime: env.block.time,
+        // cb_msg: Binary(vec![])
     });
 
     Ok(HandleResponse {
@@ -230,10 +247,11 @@ pub fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
      
 }
 
-pub fn callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
+pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
     deps: &mut Extern<S, A, Q>,
     _env: Env,
     entropy: T,
+    cb_msg: Binary,
     callback_code_hash: String,
     contract_addr: String
 ) -> StdResult <HandleResponse> {
@@ -246,17 +264,46 @@ pub fn callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
         HumanAddr(contract_addr.to_string()),
     )?;
 
-    let cb_resp_data = to_binary(&HandleAnswer::Rn {
+    let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
         rn: query_ans.rn_output.rn,
-    });
+        cb_msg: cb_msg
+    };
+
+    let cosmos_msg = receive_rn_msg.to_cosmos_msg(
+        callback_code_hash.to_string(), 
+        HumanAddr(contract_addr.to_string()), 
+        None
+    )?;
+
+    // let cb_resp_data = to_binary(&HandleAnswer::Rn {
+    //     rn: query_ans.rn_output.rn,
+    // });
 
     Ok(HandleResponse {
-        messages: vec![],
+        messages: vec![cosmos_msg],
         log: vec![],
-        data: Some(cb_resp_data?),
+        data: None
+        // data: Some(cb_resp_data?),
     })
 
     // Ok(HandleResponse::default())
+}
+
+pub fn try_receive_rn<S: Storage, A: Api, Q: Querier>(  // RN consumer's handle message that continues the code
+    _deps: &mut Extern<S, A, Q>,
+    _env: Env,
+    rn: [u8; 32],
+    cb_msg: Binary,
+) -> StdResult<HandleResponse> {
+
+    let consumer_output = format!("Original message: {:?}, combined with rn: {:?}", cb_msg.to_base64(), rn);
+    // let consumer_output_binary = to_binary(&consumer_output);
+
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![log("output", consumer_output)],
+        data: None,
+    })
 }
 
 /////////////////////////////////////////////////////////////////////////////////
