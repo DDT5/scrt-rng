@@ -18,10 +18,10 @@ use secret_toolkit::utils::{pad_handle_result, pad_query_result, Query}; //, Han
 use secret_toolkit::crypto::{sha_256};  //Prng
 
 // use serde_json_wasm as serde_json;
-use x25519_dalek::{StaticSecret}; //PublicKey, 
+// use x25519_dalek::{StaticSecret}; //PublicKey, 
 
-// use rand::{Rng, SeedableRng}; //seq::SliceRandom,
-// use rand_chacha::ChaChaRng;
+use rand_chacha::ChaChaRng;
+use rand::{Rng, SeedableRng}; //seq::SliceRandom,
 use sha2::{Digest};
 use std::convert::TryInto;
 
@@ -204,12 +204,19 @@ pub fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     state.seed = new_seed;
     save_seed(&mut deps.storage, STATE_KEY, &state)?;
 
-    //Generate random number
-    let rn_output= StaticSecret::from(new_seed);
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
+
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
 
     // Change random number to binary
     let resp_data = to_binary(&HandleAnswer::Rn {
-        rn: rn_output.to_bytes(),
+        rn: rn_output,
         // Debugging - Remove blocktime eventually
         // blocktime: env.block.time,
     });
@@ -279,11 +286,18 @@ pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     let new_string: String = format!("{:?}+{:?}", state.seed, entropy);
     let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
     let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+    
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
 
-    //Generate random number
-    let rn_output= StaticSecret::from(new_seed);
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
 
-    to_binary(&QueryAnswer::RnOutput{rn: rn_output.to_bytes()})
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+
+    to_binary(&QueryAnswer::RnOutput{rn: rn_output})
 
     //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
     // let state: State = load(&deps.storage, STATE_KEY)?;
@@ -352,10 +366,17 @@ fn try_authquery<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
     let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
     
-    //Generate random number
-    let rn_output= StaticSecret::from(new_seed);
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
 
-    to_binary(&QueryAnswer::RnOutput{rn: rn_output.to_bytes()})
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+
+    to_binary(&QueryAnswer::RnOutput{rn: rn_output})
 }
 
 
