@@ -1,22 +1,64 @@
+use schemars::JsonSchema;
+// use schemars::_serde_json::Serializer;
+use serde::{Deserialize, Serialize};  
+
 use cosmwasm_std::{
-    to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier,  //debug_print, 
-    StdError, StdResult, Storage,
-    BankMsg, Coin, CosmosMsg, Uint128
+    to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, debug_print,
+    StdError, StdResult, QueryResult,
+    Storage, BankMsg, Coin, CosmosMsg, Uint128,
+    HumanAddr
 };
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer};
-use crate::state::{State, load_seed, save_seed};
+use crate::state::{State, load_seed, save_seed, write_viewing_key, read_viewing_key};  //CONFIG_KEY
+use crate::viewing_key::{ViewingKey}; //self, 
+use crate::viewing_key::VIEWING_KEY_SIZE;
+
+use secret_toolkit::utils::{pad_handle_result, pad_query_result, Query}; //, HandleCallback, InitCallback, 
+use secret_toolkit::crypto::{sha_256};  //Prng
 
 // use serde_json_wasm as serde_json;
-use x25519_dalek::{StaticSecret}; //PublicKey, 
+// use x25519_dalek::{StaticSecret}; //PublicKey, 
 
-// use rand::{Rng, SeedableRng}; //seq::SliceRandom,
-// use rand_chacha::ChaChaRng;
+use rand_chacha::ChaChaRng;
+use rand::{Rng, SeedableRng}; //seq::SliceRandom,
 use sha2::{Digest};
 use std::convert::TryInto;
 
 pub const STATE_KEY: &[u8] = b"state";
+pub const BLOCK_SIZE: usize = 256;
 pub const MIN_FEE: Uint128 = Uint128(100_000); /* 1mn uscrt = 1 SCRT */
+
+/////////////////////////////////////////////////////////////////////////////////
+// Enums for callback
+/////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryRnMsg {
+    QueryRn {entropy: String}
+}
+
+impl Query for QueryRnMsg {
+    const BLOCK_SIZE: usize = BLOCK_SIZE;
+}
+
+#[derive(Serialize, Deserialize, JsonSchema, Debug)]
+pub struct RnOutput {
+    pub rn: [u8; 32],
+}
+
+
+#[derive(Serialize, Deserialize, Debug, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub struct QueryAnswerMsg {
+    pub rn_output: RnOutput,
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////
+// Init function
+/////////////////////////////////////////////////////////////////////////////////
 
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
@@ -28,6 +70,7 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     let init_seed: [u8; 32] = init_seed_arr.as_slice().try_into().expect("Invalid");
     let state = State {
         seed: init_seed,
+        prng_seed: sha_256(base64::encode(msg.prng_seed).as_bytes()).to_vec(),
     };
 
     //Save seed
@@ -44,17 +87,47 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     env: Env,
     msg: HandleMsg,
 ) -> StdResult <HandleResponse> {
-    match msg {
+    let response = match msg {
         HandleMsg::EntropyString {entropy} => donate_entropy(deps, env, entropy),
-        HandleMsg::EntropyBool {entropy} => donate_entropy(deps, env, entropy),
-        HandleMsg::EntropyInt {entropy} => donate_entropy(deps, env, entropy),
-        HandleMsg::EntropyChar {entropy} => donate_entropy(deps, env, entropy),
+        // HandleMsg::EntropyBool {entropy} => donate_entropy(deps, env, entropy),
+        // HandleMsg::EntropyInt {entropy} => donate_entropy(deps, env, entropy),
+        // HandleMsg::EntropyChar {entropy} => donate_entropy(deps, env, entropy),
         
-        HandleMsg::RnString {entropy} => get_rn(deps, env, entropy),
-        HandleMsg::RnBool {entropy} => get_rn(deps, env, entropy),
-        HandleMsg::RnInt {entropy} => get_rn(deps, env, entropy),
-        HandleMsg::RnChar {entropy} => get_rn(deps, env, entropy),
-    }
+        HandleMsg::RnString {entropy} => call_rn(deps, env, entropy),
+        // HandleMsg::RnBool {entropy} => call_rn(deps, env, entropy),
+        // HandleMsg::RnInt {entropy} => call_rn(deps, env, entropy),
+        // HandleMsg::RnChar {entropy} => call_rn(deps, env, entropy),
+
+        HandleMsg::Callback {
+            entropy, callback_code_hash, contract_addr
+        } => callback_rn(deps, env, entropy, callback_code_hash, contract_addr),
+
+        HandleMsg::GenerateViewingKey {entropy, .. } => try_generate_viewing_key(deps, env, entropy),
+    };
+    pad_handle_result(response, BLOCK_SIZE)
+}
+
+pub fn try_generate_viewing_key<S: Storage, A: Api, Q: Querier> (
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    entropy: String
+) -> StdResult<HandleResponse> {
+    let config: State = load_seed(&mut deps.storage, STATE_KEY)?;   // changed this from CONFIG_KEY
+    let prng_seed = config.prng_seed;
+
+    let key = ViewingKey::new(&env, &prng_seed, (&entropy).as_ref());
+
+    let message_sender = deps.api.canonical_address(&env.message.sender)?;
+
+    write_viewing_key(&mut deps.storage, &message_sender, &key);
+
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![],
+        data: Some(to_binary(&HandleAnswer::GenerateViewingKey {
+            key,
+        })?),
+    })
 }
 
 pub fn donate_entropy<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
@@ -85,6 +158,9 @@ pub fn donate_entropy<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
        balance.amount.u128()/100, 
         &balance.denom); 
 
+    // debug print
+    debug_print!("debug print here: thanks for donating entropy, {}", env.message.sender);
+
     Ok(HandleResponse {
         // reward payout for caller of donate_entropy 
         messages: vec![CosmosMsg::Bank(BankMsg::Send {
@@ -94,11 +170,11 @@ pub fn donate_entropy<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
         })],
         log: vec![],
         // data for debugging purposes. Remove in final implementation 
-        data: Some(to_binary(&balance_info)?),   
+        data: Some(to_binary(&balance_info)?),
     })
 }
 
-pub fn get_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+pub fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     entropy: T
@@ -128,16 +204,21 @@ pub fn get_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     state.seed = new_seed;
     save_seed(&mut deps.storage, STATE_KEY, &state)?;
 
-    //Generate random number
-    // let rn_output: [u8;32] = ChaChaRng::from_seed(new_seed).gen();
-    let rn_output= StaticSecret::from(new_seed);
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
+
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
 
     // Change random number to binary
     let resp_data = to_binary(&HandleAnswer::Rn {
-        // rn: rn_output,
-        rn: rn_output.to_bytes(),
+        rn: rn_output,
         // Debugging - Remove blocktime eventually
-        blocktime: env.block.time,
+        // blocktime: env.block.time,
     });
 
     Ok(HandleResponse {
@@ -149,6 +230,35 @@ pub fn get_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
      
 }
 
+pub fn callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
+    deps: &mut Extern<S, A, Q>,
+    _env: Env,
+    entropy: T,
+    callback_code_hash: String,
+    contract_addr: String
+) -> StdResult <HandleResponse> {
+    let entropy_string = format!("{:?}",entropy);
+  
+    let query_msg = QueryRnMsg::QueryRn {entropy: entropy_string};
+    let query_ans: QueryAnswerMsg = query_msg.query(   //: StdResult<Binary>   QueryAnswerMsg 
+        &deps.querier, 
+        callback_code_hash.to_string(), 
+        HumanAddr(contract_addr.to_string()),
+    )?;
+
+    let cb_resp_data = to_binary(&HandleAnswer::Rn {
+        rn: query_ans.rn_output.rn,
+    });
+
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![],
+        data: Some(cb_resp_data?),
+    })
+
+    // Ok(HandleResponse::default())
+}
+
 /////////////////////////////////////////////////////////////////////////////////
 // Query functions 
 /////////////////////////////////////////////////////////////////////////////////
@@ -156,19 +266,38 @@ pub fn get_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
 pub fn query<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     msg: QueryMsg,
-) -> StdResult<Binary> {
-    match msg {
-        QueryMsg::RnQuery { } => placeholder_rn_query(deps),
-   }
+) -> QueryResult {  // StdResult<Binary> , QueryResult
+    let response = match msg {
+        QueryMsg::QueryRn {entropy} => try_query_rn(deps, entropy),
+        QueryMsg::QueryAQuery {entropy, callback_code_hash, contract_addr} => try_query_a_query(deps, entropy, callback_code_hash, contract_addr),
+        _ => authenticated_queries(deps, msg),
+   };
+   pad_query_result(response, BLOCK_SIZE)
 }
 
-pub fn placeholder_rn_query<S: Storage, A: Api, Q: Querier>(
-    _deps: &Extern<S, A, Q>,
-) -> StdResult<Binary> {
+pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+    deps: &Extern<S, A, Q>,
+    entropy: T,
+) -> QueryResult {
+    // Load seed
+    let state: State = load_seed(&deps.storage, STATE_KEY)?; // remove `mut`
 
-    let mut data = String::new();
-    data.push_str("Secret Oracle - RNG");
-    to_binary(&QueryAnswer::RnOutput{info: data})
+    // Converts new entropy and old seed into a new seed
+    let new_string: String = format!("{:?}+{:?}", state.seed, entropy);
+    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+    
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
+
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+
+    to_binary(&QueryAnswer::RnOutput{rn: rn_output})
 
     //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
     // let state: State = load(&deps.storage, STATE_KEY)?;
@@ -177,8 +306,82 @@ pub fn placeholder_rn_query<S: Storage, A: Api, Q: Querier>(
 
 }
 
+pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
+    deps: &Extern<S, A, Q>,
+    entropy: String,
+    callback_code_hash: String, 
+    contract_addr: String
+) -> QueryResult {
+    let query_msg = QueryRnMsg::QueryRn {entropy: entropy};
+    let query_ans: QueryAnswerMsg = query_msg.query(   //: StdResult<Binary>   QueryAnswerMsg 
+        &deps.querier, 
+        callback_code_hash.to_string(), 
+        HumanAddr(contract_addr.to_string()),
+    )?;
+
+    to_binary(&QueryAnswer::RnOutput{rn: query_ans.rn_output.rn})
+    
+}
+
 /////////////////////////////////////////////////////////////////////////////////
-// Unit test
+// Authenticated Queries 
+/////////////////////////////////////////////////////////////////////////////////
+
+fn authenticated_queries<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    msg: QueryMsg
+) -> QueryResult {
+    let (addresses, key) = msg.get_validation_params();
+
+    for address in addresses {
+        let canonical_addr = deps.api.canonical_address(address)?;
+        let expected_key = read_viewing_key(&deps.storage, &canonical_addr);
+
+        if expected_key.is_none() {
+            // Checking the key will take significant time. We don't want to exit immediately if it isn't set
+            // in a way which will allow to time the command and determine if a viewing key doesn't exist
+            key.check_viewing_key(&[0u8; VIEWING_KEY_SIZE]);
+        } else if key.check_viewing_key(expected_key.unwrap().as_slice()) {
+            return match msg {
+                QueryMsg::AuthQuery {addr, entropy, ..} => try_authquery(&deps, entropy, &addr),
+                _ => panic!("This query type does not require authentication"),
+            };
+        }
+    }
+
+    Err(StdError::unauthorized())
+}
+
+fn try_authquery<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+    deps: &Extern<S, A, Q>,
+    entropy: T,
+    _addr: &HumanAddr,
+    // vk: String,
+) -> StdResult<Binary> {
+    // Load seed
+    let state: State = load_seed(&deps.storage, STATE_KEY)?; // remove `mut`
+
+    // Converts new entropy and old seed into a new seed
+    let new_string: String = format!("{:?}+{:?}", state.seed, entropy);
+    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+    
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
+
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+
+    to_binary(&QueryAnswer::RnOutput{rn: rn_output})
+}
+
+
+/////////////////////////////////////////////////////////////////////////////////
+// Unit tests
 /////////////////////////////////////////////////////////////////////////////////
 
 #[cfg(test)]
@@ -189,35 +392,35 @@ mod tests {
     // use serde::__private::de::IdentifierDeserializer;
 
     #[test]
-    fn get_rn_changes_rn() {
+    fn call_rn_changes_rn() {
         let mut deps = mock_dependencies(20, &coins(2, "token"));
 
         let env = mock_env("creator", &coins(2, "token"));
-        let msg = InitMsg {initseed: String::from("initseed input String")};
+        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed")};
         let _res = init(&mut deps, env, msg).unwrap();
         
         let env = mock_env("RN user", &coins(MIN_FEE.u128(), "uscrt"));
         let msg = HandleMsg::RnString {entropy: String::from("String input")};
-        let res1 = get_rn(&mut deps, env, msg).unwrap().data;
+        let res1 = call_rn(&mut deps, env, msg).unwrap().data;
         
         let env = mock_env("RN user", &coins(MIN_FEE.u128(), "uscrt"));
         let msg = HandleMsg::RnString {entropy: String::from("String input")};
-        let res2 = get_rn(&mut deps, env, msg).unwrap().data;
+        let res2 = call_rn(&mut deps, env, msg).unwrap().data;
 
         assert_ne!(res1, res2);
     }
 
     #[test]
-    fn get_rn_requires_min_fee() {
+    fn call_rn_requires_min_fee() {
         let mut deps = mock_dependencies(20, &coins(2, "token"));
 
         let env = mock_env("creator", &coins(2, "token"));
-        let msg = InitMsg {initseed: String::from("initseed input String")};
+        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed")};
         let _res = init(&mut deps, env, msg).unwrap();
         
         let env = mock_env("RN user", &coins(MIN_FEE.u128()-1, "uscrt"));
         let msg = HandleMsg::RnString {entropy: String::from("String input")};
-        let res = get_rn(&mut deps, env, msg);
+        let res = call_rn(&mut deps, env, msg);
 
         match res {
             Err(StdError::GenericErr {..}) => {}
