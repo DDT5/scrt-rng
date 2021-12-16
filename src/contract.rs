@@ -6,7 +6,7 @@ use cosmwasm_std::{
     to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, debug_print,
     StdError, StdResult, QueryResult,
     Storage, BankMsg, Coin, CosmosMsg, Uint128,
-    HumanAddr
+    HumanAddr, log
 };
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer};
@@ -14,7 +14,7 @@ use crate::state::{State, load_seed, save_seed, write_viewing_key, read_viewing_
 use crate::viewing_key::{ViewingKey}; //self, 
 use crate::viewing_key::VIEWING_KEY_SIZE;
 
-use secret_toolkit::utils::{pad_handle_result, pad_query_result, Query}; //, HandleCallback, InitCallback, 
+use secret_toolkit::utils::{pad_handle_result, pad_query_result, Query, HandleCallback}; //, InitCallback, 
 use secret_toolkit::crypto::{sha_256};  //Prng
 
 // use serde_json_wasm as serde_json;
@@ -33,6 +33,19 @@ pub const MIN_FEE: Uint128 = Uint128(100_000); /* 1mn uscrt = 1 SCRT */
 // Enums for callback
 /////////////////////////////////////////////////////////////////////////////////
 
+
+// Calling handle in another contract
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiveRnHandleMsg {
+    ReceiveRn {rn: [u8; 32], cb_msg: Binary},
+}
+
+impl HandleCallback for ReceiveRnHandleMsg {
+    const BLOCK_SIZE: usize = BLOCK_SIZE;
+}
+
+// Calling query in another contract
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryRnMsg {
@@ -47,7 +60,6 @@ impl Query for QueryRnMsg {
 pub struct RnOutput {
     pub rn: [u8; 32],
 }
-
 
 #[derive(Serialize, Deserialize, Debug, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -98,9 +110,13 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
         // HandleMsg::RnInt {entropy} => call_rn(deps, env, entropy),
         // HandleMsg::RnChar {entropy} => call_rn(deps, env, entropy),
 
-        HandleMsg::Callback {
-            entropy, callback_code_hash, contract_addr
-        } => callback_rn(deps, env, entropy, callback_code_hash, contract_addr),
+        HandleMsg::CallbackRn {
+            entropy, cb_msg, callback_code_hash, contract_addr
+        } => try_callback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
+
+        HandleMsg::ReceiveRn {
+            rn, cb_msg
+        } => try_receive_rn(deps, env, rn, cb_msg),
 
         HandleMsg::GenerateViewingKey {entropy, .. } => try_generate_viewing_key(deps, env, entropy),
     };
@@ -219,6 +235,7 @@ pub fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
         rn: rn_output,
         // Debugging - Remove blocktime eventually
         // blocktime: env.block.time,
+        // cb_msg: Binary(vec![])
     });
 
     Ok(HandleResponse {
@@ -230,33 +247,89 @@ pub fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
      
 }
 
-pub fn callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
+pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
     deps: &mut Extern<S, A, Q>,
-    _env: Env,
+    env: Env,
     entropy: T,
+    cb_msg: Binary,
     callback_code_hash: String,
     contract_addr: String
 ) -> StdResult <HandleResponse> {
-    let entropy_string = format!("{:?}",entropy);
-  
-    let query_msg = QueryRnMsg::QueryRn {entropy: entropy_string};
-    let query_ans: QueryAnswerMsg = query_msg.query(   //: StdResult<Binary>   QueryAnswerMsg 
-        &deps.querier, 
+    // need to transfer at least <fee amount> when requesting random number  
+    if env.message.sent_funds.last().unwrap().amount
+        < MIN_FEE
+    || env.message.sent_funds.last().unwrap().denom != String::from("uscrt")
+{
+    return Err(StdError::generic_err(
+        format!("Transferred amount:{}; coin:{}. Need to transfer {} uSCRT to generate random number.",
+        env.message.sent_funds.last().unwrap().amount,
+        env.message.sent_funds.last().unwrap().denom,
+        MIN_FEE.u128()),
+    ));
+}
+    //Load state
+    let mut state: State = load_seed(&deps.storage, STATE_KEY)?;
+
+    //Converts new entropy and old seed into a new seed
+    let new_string: String = format!("{:?}+{:?}+{:?}", entropy, state.seed, &env.block.time);
+    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+
+    //Save State
+    state.seed = new_seed;
+    save_seed(&mut deps.storage, STATE_KEY, &state)?;
+
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
+
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+
+    // Send message back to consumer (to receive_rn)
+    let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
+        rn: rn_output,
+        cb_msg: cb_msg
+    };
+
+    let cosmos_msg = receive_rn_msg.to_cosmos_msg(
         callback_code_hash.to_string(), 
-        HumanAddr(contract_addr.to_string()),
+        HumanAddr(contract_addr.to_string()), 
+        None
     )?;
 
-    let cb_resp_data = to_binary(&HandleAnswer::Rn {
-        rn: query_ans.rn_output.rn,
-    });
+    // let cb_resp_data = to_binary(&HandleAnswer::Rn {
+    //     rn: query_ans.rn_output.rn,
+    // });
 
     Ok(HandleResponse {
-        messages: vec![],
+        messages: vec![cosmos_msg],
         log: vec![],
-        data: Some(cb_resp_data?),
+        data: None
+        // data: Some(cb_resp_data?),
     })
 
     // Ok(HandleResponse::default())
+}
+
+pub fn try_receive_rn<S: Storage, A: Api, Q: Querier>(  // RN consumer's handle message that continues the code
+    _deps: &mut Extern<S, A, Q>,
+    _env: Env,
+    rn: [u8; 32],
+    cb_msg: Binary,
+) -> StdResult<HandleResponse> {
+
+    let consumer_output = format!("Original message: {:?}, combined with rn: {:?}", cb_msg.to_base64(), rn);
+    // let consumer_output_binary = to_binary(&consumer_output);
+
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![log("output", consumer_output)],
+        data: None,
+    })
 }
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -270,6 +343,7 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     let response = match msg {
         QueryMsg::QueryRn {entropy} => try_query_rn(deps, entropy),
         QueryMsg::QueryAQuery {entropy, callback_code_hash, contract_addr} => try_query_a_query(deps, entropy, callback_code_hash, contract_addr),
+        QueryMsg::QuerySeed {} => try_query_seed(deps), // <-- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
         _ => authenticated_queries(deps, msg),
    };
    pad_query_result(response, BLOCK_SIZE)
@@ -299,11 +373,6 @@ pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
 
     to_binary(&QueryAnswer::RnOutput{rn: rn_output})
 
-    //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-    // let state: State = load(&deps.storage, STATE_KEY)?;
-    // to_binary(&QueryAnswer::Info{info:format!("{:?}",state.seed)})
-    //--////////////////////////////////////////////////////////// 
-
 }
 
 pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
@@ -322,6 +391,21 @@ pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
     to_binary(&QueryAnswer::RnOutput{rn: query_ans.rn_output.rn})
     
 }
+
+
+//FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
+pub fn try_query_seed<S: Storage, A: Api, Q: Querier>(
+    _deps: &Extern<S, A, Q>,
+) -> QueryResult {
+    // let state: State = load_seed(&deps.storage, STATE_KEY)?;
+    // to_binary(&QueryAnswer::Seed{seed: state.seed})
+
+    to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
+
+}
+// --////////////////////////////////////////////////////////// 
+
+
 
 /////////////////////////////////////////////////////////////////////////////////
 // Authenticated Queries 

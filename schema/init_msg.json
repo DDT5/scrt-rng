@@ -3,12 +3,15 @@
   "title": "InitMsg",
   "type": "object",
   "required": [
-    "count"
+    "initseed",
+    "prng_seed"
   ],
   "properties": {
-    "count": {
-      "type": "integer",
-      "format": "int32"
+    "initseed": {
+      "type": "string"
+    },
+    "prng_seed": {
+      "type": "string"
     }
   }
 }
