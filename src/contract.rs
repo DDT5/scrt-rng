@@ -249,23 +249,49 @@ pub fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
 
 pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
     deps: &mut Extern<S, A, Q>,
-    _env: Env,
+    env: Env,
     entropy: T,
     cb_msg: Binary,
     callback_code_hash: String,
     contract_addr: String
 ) -> StdResult <HandleResponse> {
-    let entropy_string = format!("{:?}",entropy);
-  
-    let query_msg = QueryRnMsg::QueryRn {entropy: entropy_string};
-    let query_ans: QueryAnswerMsg = query_msg.query(   //: StdResult<Binary>   QueryAnswerMsg 
-        &deps.querier, 
-        callback_code_hash.to_string(), 
-        HumanAddr(contract_addr.to_string()),
-    )?;
+    // need to transfer at least <fee amount> when requesting random number  
+    if env.message.sent_funds.last().unwrap().amount
+        < MIN_FEE
+    || env.message.sent_funds.last().unwrap().denom != String::from("uscrt")
+{
+    return Err(StdError::generic_err(
+        format!("Transferred amount:{}; coin:{}. Need to transfer {} uSCRT to generate random number.",
+        env.message.sent_funds.last().unwrap().amount,
+        env.message.sent_funds.last().unwrap().denom,
+        MIN_FEE.u128()),
+    ));
+}
+    //Load state
+    let mut state: State = load_seed(&deps.storage, STATE_KEY)?;
 
+    //Converts new entropy and old seed into a new seed
+    let new_string: String = format!("{:?}+{:?}+{:?}", entropy, state.seed, &env.block.time);
+    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+
+    //Save State
+    state.seed = new_seed;
+    save_seed(&mut deps.storage, STATE_KEY, &state)?;
+
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
+
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+
+    // Send message back to consumer (to receive_rn)
     let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
-        rn: query_ans.rn_output.rn,
+        rn: rn_output,
         cb_msg: cb_msg
     };
 
@@ -317,6 +343,7 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     let response = match msg {
         QueryMsg::QueryRn {entropy} => try_query_rn(deps, entropy),
         QueryMsg::QueryAQuery {entropy, callback_code_hash, contract_addr} => try_query_a_query(deps, entropy, callback_code_hash, contract_addr),
+        QueryMsg::QuerySeed {} => try_query_seed(deps), // <-- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
         _ => authenticated_queries(deps, msg),
    };
    pad_query_result(response, BLOCK_SIZE)
@@ -346,11 +373,6 @@ pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
 
     to_binary(&QueryAnswer::RnOutput{rn: rn_output})
 
-    //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-    // let state: State = load(&deps.storage, STATE_KEY)?;
-    // to_binary(&QueryAnswer::Info{info:format!("{:?}",state.seed)})
-    //--////////////////////////////////////////////////////////// 
-
 }
 
 pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
@@ -369,6 +391,21 @@ pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
     to_binary(&QueryAnswer::RnOutput{rn: query_ans.rn_output.rn})
     
 }
+
+
+//FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
+pub fn try_query_seed<S: Storage, A: Api, Q: Querier>(
+    _deps: &Extern<S, A, Q>,
+) -> QueryResult {
+    // let state: State = load_seed(&deps.storage, STATE_KEY)?;
+    // to_binary(&QueryAnswer::Seed{seed: state.seed})
+
+    to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
+
+}
+// --////////////////////////////////////////////////////////// 
+
+
 
 /////////////////////////////////////////////////////////////////////////////////
 // Authenticated Queries 

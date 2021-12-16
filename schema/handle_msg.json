@@ -5,33 +5,132 @@
     {
       "type": "object",
       "required": [
-        "increment"
+        "entropy_string"
       ],
       "properties": {
-        "increment": {
-          "type": "object"
+        "entropy_string": {
+          "type": "object",
+          "required": [
+            "entropy"
+          ],
+          "properties": {
+            "entropy": {
+              "type": "string"
+            }
+          }
         }
       }
     },
     {
       "type": "object",
       "required": [
-        "reset"
+        "rn_string"
       ],
       "properties": {
-        "reset": {
+        "rn_string": {
           "type": "object",
           "required": [
-            "count"
+            "entropy"
           ],
           "properties": {
-            "count": {
-              "type": "integer",
-              "format": "int32"
+            "entropy": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "callback_rn"
+      ],
+      "properties": {
+        "callback_rn": {
+          "type": "object",
+          "required": [
+            "callback_code_hash",
+            "cb_msg",
+            "contract_addr",
+            "entropy"
+          ],
+          "properties": {
+            "callback_code_hash": {
+              "type": "string"
+            },
+            "cb_msg": {
+              "$ref": "#/definitions/Binary"
+            },
+            "contract_addr": {
+              "type": "string"
+            },
+            "entropy": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "receive_rn"
+      ],
+      "properties": {
+        "receive_rn": {
+          "type": "object",
+          "required": [
+            "cb_msg",
+            "rn"
+          ],
+          "properties": {
+            "cb_msg": {
+              "$ref": "#/definitions/Binary"
+            },
+            "rn": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              },
+              "maxItems": 32,
+              "minItems": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "generate_viewing_key"
+      ],
+      "properties": {
+        "generate_viewing_key": {
+          "type": "object",
+          "required": [
+            "entropy"
+          ],
+          "properties": {
+            "entropy": {
+              "type": "string"
+            },
+            "padding": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         }
       }
     }
-  ]
+  ],
+  "definitions": {
+    "Binary": {
+      "description": "Binary is a wrapper around Vec<u8> to add base64 de/serialization with serde. It also adds some helper methods to help encode inline.\n\nThis is only needed as serde-json-{core,wasm} has a horrible encoding for Vec<u8>",
+      "type": "string"
+    }
+  }
 }

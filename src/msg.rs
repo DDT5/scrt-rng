@@ -51,7 +51,8 @@ pub enum HandleAnswer {
 pub enum QueryMsg {
     QueryRn {entropy: String},
     QueryAQuery {entropy: String, callback_code_hash: String, contract_addr: String},
-    AuthQuery {entropy: String, addr: HumanAddr, vk: String}
+    AuthQuery {entropy: String, addr: HumanAddr, vk: String},
+    QuerySeed {} // <--- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
 }
 
 impl QueryMsg {
@@ -69,5 +70,8 @@ impl QueryMsg {
 pub enum QueryAnswer {
     RnOutput {
         rn: [u8; 32],
+    },
+    Seed {    // <--- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
+        seed: [u8; 32]     // <--- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
     }
 }
