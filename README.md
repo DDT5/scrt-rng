@@ -1,5 +1,5 @@
 # SECRET ORACLE - RNG 
-Github repository: https://github.com/DDT5/scrt-rng
+
 
 ## Project description
 
@@ -18,9 +18,9 @@ Security is a significant challenge for RNGs operating completely on-chain as bl
 Scrt-RNG's solution is to crowdsource entropy. Every transaction with Scrt-RNG changes the seed stored in the contract, which is used to generate  random numbers. Therefore, Scrt-RNG becomes more secure the more it is used [^fn1]. For example, if there are 10 interactions with the RNG every second, an attack likely needs to be performed within a 0.1-second window. As a result, there is a good reason for other applications to use Scrt-RNG, instead of building a similar logic within their own contracts or creating duplicates of this contract.
 
 Scrt-RNG's implementation of crowdsourcing entropy is only possible on a computationally private blockchain such as Secret Network, as it has three important features:
-- Contract storage is encrypted, so the seed is not visible to any entity except the contract itself. This is critical for securty of the RNG 
-- Users' entropy inputs are not visible to others. In a transparent blockchain, even if the seed is somehow concealed, an attacker can derive the current contract seed by inputting the exact sequence of entropy inputs up to the present state. This is not possible on Secret Network as entropy inputs are encrypted  
-- RN outputs are transmitted back to the user in an encrypted form, so no one can see the RN that was used. This is an important feature given the goal of private randomness 
+- Contract storage is encrypted, so the seed is not visible to any entity except the contract itself. This is critical for security of the RNG 
+- Users' entropy inputs are not visible to others. In a transparent blockchain, even if the seed is somehow concealed, an attacker can derive the current contract seed by inputting the entropy inputs in the exact sequence up to the present state. This is not possible on Secret Network as entropy inputs are encrypted  
+- RN outputs are transmitted back to the user in an encrypted form, so no one can see the RN that was generated. This is an important feature given the goal of private randomness 
 
 
 [^fn1]: Specifically, security increases as the average number of handle transactions per block increases
@@ -38,28 +38,27 @@ Although query functions are typically needed for contracts (as contracts only p
  
 
 ## Detailed product description
-Different implementations generally face trade-offs between cost [^fn2], security and useability. With that in mind, I will aim to implement at least two different RN-generating functions, giving RN users the choice that fits their use case.
+Different implementations generally face trade-offs between cost [^fn2], security and usability. With that in mind, I will aim to implement at least two different RN-generating functions, giving RN users the choice that fits their use case.
 
 [^fn2]: If a zero-fee implementation is possible from a security point of view (which is the aim), cost refers to gas costs
 
 ### Option 1: the default
-I anticipate this to be the default function as it has high useability without sacrificing much on security or useability. 
+I anticipate this to be the default function as it has high usability without sacrificing much on security or cost. 
 
-Users call a handle function by providing two inputs entropy: String and cb_msg: Binary. The String is a private input which mixes with (and changes) the contract seed to generate a random 256-bit number, in the form of a [u8; 32] array. The cb_msg Binary is the message the user wants its own contract to continue processing after consuming the RN. The get_rn function echoes the cb_msg binary back to the consumer.  
+Users call a handle function by providing two inputs -- entropy: String and cb_msg: Binary. The String is a private input which mixes with (and changes) the contract seed to generate a random 256-bit number, in the form of a [u8; 32] array. The cb_msg Binary is the message the user wants its own contract to continue processing after consuming the RN. The get_rn function echoes the cb_msg binary back to the consumer.  
 
 ![flowchart image](flowchart.png)
 
-
 This implementation should be secure unless:
-1. An attacker knows the victim's entropy input. In this situation, the attacker and create a hard fork of the Secret Network blockchain, input its victim's intended entropy, and view the RN output before the victim consumes it. However, the attacker has limited time, as all this must be done within the 5-6 second block time (as each block changes the RN output), and before another user interacts with the contract (which changes the seed unpredictably) 
-2. The attacker is the RN consumer him/herself. For example, an lottery dApp intending to cheat its own users may run the hard fork attack above, as it knows its own intended entropy input
+1. An attacker knows the victim's entropy input. In this situation, the attacker can create a hard fork of the Secret Network blockchain, input its victim's intended entropy, and view the RN output before the victim consumes it. However, the attacker has limited time, as all this must be done within the 5-6 second block time (as each block changes the RN output), and before another user interacts with the contract (which changes the seed unpredictably) 
+2. The attacker is the RN consumer him/herself. For example, a lottery dApp intending to cheat its own users may run the hard fork attack above, as it knows its own intended entropy input
 
 As long as the user's entropy input is not known, this option should offer adequate security. However, Option 2 below aims to address these vulnerabilities for use cases that require it.
 
 ### Option 2: high security 
 This will be for users who need higher security, and are able to handle a small delay between requesting an RN and receiving the RN.
 
-The implementation is similar to the one above. However, instead of the RN output and cb_msg being sent back to the user in the same transaction, the cb_msg is first stored in the contract. When the next user calls this function, the RN is generated with new entropy inputs and the cb_msg is echoed back. In other words, users will perform a transaction to request an RN, then must wait for a period before receiving the RN.
+The implementation will be an extension of the design above. Instead of the RN output and cb_msg being sent back to the user in the same transaction, the cb_msg is first stored in the contract. When the next user calls this function, the RN is generated with new entropy inputs and the cb_msg is echoed back. In other words, users will perform a transaction to request an RN, then must wait for a period before receiving the RN.
 
 This adds security addressing the vulnerability described above, as the hard fork attack becomes more complex to execute and infeasible if there are high volumes of interactions with Scrt-RNG. However, drawbacks are:
 - users calling this function face unpredictable gas, as they will be paying gas for processing the cb_msg from a previous user
@@ -78,5 +77,4 @@ This can be implemented as a simple query function that generates RNs based on t
 If this option is implemented, users need to be made aware of the relatively low security compared to the previous two options. Particularly:
 - Any seed change is not reflected in the output until the next block
 - Inputting the same entropy in quick succession will likely result in the same RN
-- An attacker can see its victim's RN output is beforehand, if the attacker knows the victim's intended entropy input. However, unlike the vulnerability described in Option 1, the attacker does not need to create a hard fork of the blockchain to perform this attack. 
-
+- An attacker can see what its victim's RN output will be beforehand, if the attacker knows the victim's intended entropy input. However, unlike the vulnerability described in Option 1, the attacker does not need to create a hard fork of the blockchain to perform this attack
