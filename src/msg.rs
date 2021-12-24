@@ -18,12 +18,14 @@ pub enum HandleMsg {
     // EntropyInt {entropy: i32},
     // EntropyChar {entropy: char},
     
-    RnString {entropy: String},
+    // RnString {entropy: String},
     // RnBool {entropy: bool},
     // RnInt {entropy: i32},
     // RnChar {entropy: char},
 
     CallbackRn {entropy: String, cb_msg: Binary, callback_code_hash: String, contract_addr: String},
+
+    HcallbackRn {entropy: String, cb_msg: Binary, callback_code_hash: String, contract_addr: String},
 
     ReceiveRn {rn: [u8; 32], cb_msg: Binary},
 
@@ -52,7 +54,7 @@ pub enum QueryMsg {
     QueryRn {entropy: String},
     QueryAQuery {entropy: String, callback_code_hash: String, contract_addr: String},
     AuthQuery {entropy: String, addr: HumanAddr, vk: String},
-    QuerySeed {} // <--- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
+    QueryDebug {which: u32} // <--- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
 }
 
 impl QueryMsg {

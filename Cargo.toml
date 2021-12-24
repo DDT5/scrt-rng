@@ -52,9 +52,9 @@ secret-toolkit = { git = "https://github.com/enigmampc/secret-toolkit", tag = "v
 #serde-json-wasm = "0.2.1"
 #x25519-dalek = "1.1"
 rand = "0.7.3"
-#"0.8.4" maybe too new does not work
+#rand = "0.8.4" maybe too new does not work
 getrandom = { version = "0.2", features = ["js"] }
 rand_chacha = "0.2.2"
-#"0.3.1" maybe too new does not work
+#rand_chacha = "0.3.1" maybe too new does not work
 sha2 = { version = "0.9.1", default-features = false }
 
