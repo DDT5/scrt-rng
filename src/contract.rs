@@ -7,13 +7,14 @@ use cosmwasm_std::{
     to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, debug_print,
     StdError, StdResult, QueryResult, 
     Storage, BankMsg, Coin, CosmosMsg, Uint128,
-    HumanAddr, log
+    HumanAddr, log, CanonicalAddr
 };
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer}; //self
 use crate::state::{
-    State, load_state, save_state, write_viewing_key, read_viewing_key,
-    // CONFIG_KEY,
+    Seed, CbMsg, EntrpChk, Admin, ForwEntrpConfig, PrngSeed, CbMsgConfig, 
+    load_state, save_state, write_viewing_key, read_viewing_key, idx_read, idx_write, write_cb_msg, read_cb_msg,
+    SEED_KEY, CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, CB_CONFIG_KEY,
 };  
 use crate::viewing_key::{ViewingKey}; //self, 
 use crate::viewing_key::VIEWING_KEY_SIZE;
@@ -22,14 +23,12 @@ use secret_toolkit::utils::{pad_handle_result, pad_query_result, Query, HandleCa
 use secret_toolkit::crypto::{sha_256};  //Prng
 
 // use serde_json_wasm as serde_json;
-// use x25519_dalek::{StaticSecret}; //PublicKey, 
 
 use rand_chacha::ChaChaRng;
 use rand::{Rng, SeedableRng}; //seq::SliceRandom,
 use sha2::{Digest};
 use std::convert::TryInto;
 
-pub const STATE_KEY: &[u8] = b"state";
 pub const BLOCK_SIZE: usize = 256;
 pub const MIN_FEE: Uint128 = Uint128(100_000); /* 1mn uscrt = 1 SCRT */
 
@@ -38,7 +37,7 @@ pub const MIN_FEE: Uint128 = Uint128(100_000); /* 1mn uscrt = 1 SCRT */
 /////////////////////////////////////////////////////////////////////////////////
 
 
-// Calling handle in another contract
+// Calling receive_rn handle in user's contract
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiveRnHandleMsg {
@@ -48,6 +47,30 @@ pub enum ReceiveRnHandleMsg {
 impl HandleCallback for ReceiveRnHandleMsg {
     const BLOCK_SIZE: usize = BLOCK_SIZE;
 }
+
+// Calling forward_rn handle in rng-interface's contract
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FwdRnHandleMsg {
+    FwdRn {rn: [u8; 32], usr_cb_msg: Binary, usr_hash: String, usr_addr: CanonicalAddr},
+}
+
+impl HandleCallback for FwdRnHandleMsg {
+    const BLOCK_SIZE: usize = BLOCK_SIZE;
+}
+
+
+// Calling donate_entropy in another contract
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DonateEntropyMsg {
+    DonateEntropy {entropy: String},
+}
+
+impl HandleCallback for DonateEntropyMsg {
+    const BLOCK_SIZE: usize = BLOCK_SIZE;
+}
+
 
 // Calling query in another contract
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -75,25 +98,66 @@ pub struct QueryAnswerMsg {
 /////////////////////////////////////////////////////////////////////////////////
 // Init function
 /////////////////////////////////////////////////////////////////////////////////
-
 pub fn init<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     msg: InitMsg,
 ) -> StdResult<InitResponse> {
-    // Create initial seed
+    // Init seed -----------------------------------------------------------------
     let init_seed_arr = sha2::Sha256::digest(msg.initseed.as_bytes());
     let init_seed: [u8; 32] = init_seed_arr.as_slice().try_into().expect("Invalid");
-    let state = State {
-        seed: init_seed,
+    let seed = Seed {
+        seed: init_seed
+    };
+    save_state(&mut deps.storage, SEED_KEY, &seed)?;
+
+    // init other variables ------------------------------------------------------
+    let admin = Admin {
+        admin: deps.api.canonical_address(&env.message.sender)?,
+    };
+    save_state(&mut deps.storage, ADMIN_KEY, &admin)?;
+
+    let entrp_chk = EntrpChk {
+        forw_entropy_check: false,
+    };
+    save_state(&mut deps.storage, ENTRP_CHK_KEY, &entrp_chk)?;
+
+    let config = ForwEntrpConfig {
+        forw_entropy_to_hash: String::default(),
+        forw_entropy_to_addr: String::default(),
+    };
+    save_state(&mut deps.storage, CONFIG_KEY, &config)?;
+
+    let pseed = PrngSeed {
         prng_seed: sha_256(base64::encode(msg.prng_seed).as_bytes()).to_vec(),
-        cb_msg: Binary(String::from("Here is an initial message String").as_bytes().to_vec()),
-        cb_code_hash: env.contract_code_hash,
-        contract_addr: env.contract.address.to_string()
+    };
+    save_state(&mut deps.storage, PRNG_KEY, &pseed)?;
+
+    // Init CbMsg for h_callback_rn ----------------------------------------------
+    let cb_msg_config = CbMsgConfig {
+        rng_interface_hash: String::default(), // to be properly set later through config
+        rng_interface_addr: CanonicalAddr::default(), // to be properly set later through config
+        cb_offset: msg.cb_offset,
+    };
+    save_state(&mut deps.storage, CB_CONFIG_KEY, &cb_msg_config)?;
+
+    let usr_cb_store = CbMsg {
+        usr_hash: env.contract_code_hash.to_string(), // sends to receive_rn function in scrt-rng contract
+        usr_addr: deps.api.canonical_address(&env.contract.address)?,
+        usr_cb_msg: Binary(String::from("initial cb_msg").as_bytes().to_vec()),
     };
 
-    //Save seed
-    save_state(&mut deps.storage, STATE_KEY, &state)?;
+    // loop to initialize cb_msg storage based on callback_offset
+    let mut id = 0u32;
+    while id < msg.cb_offset {
+        write_cb_msg(&mut deps.storage, &id, &usr_cb_store)?;
+        id += 1;
+    }
+
+    // initialize cb_msg index (pointer) to 0
+    idx_write(&mut deps.storage).save(&0u32)?;
+
+    
     Ok(InitResponse::default())
 }
 
@@ -107,23 +171,22 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> StdResult <HandleResponse> {
     let response = match msg {
-        HandleMsg::EntropyString {entropy} => donate_entropy(deps, env, entropy),
-        // HandleMsg::EntropyBool {entropy} => donate_entropy(deps, env, entropy),
-        // HandleMsg::EntropyInt {entropy} => donate_entropy(deps, env, entropy),
-        // HandleMsg::EntropyChar {entropy} => donate_entropy(deps, env, entropy),
-        
-        // HandleMsg::RnString {entropy} => call_rn(deps, env, entropy),
-        // HandleMsg::RnBool {entropy} => call_rn(deps, env, entropy),
-        // HandleMsg::RnInt {entropy} => call_rn(deps, env, entropy),
-        // HandleMsg::RnChar {entropy} => call_rn(deps, env, entropy),
+        HandleMsg::Configure {
+            forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr, interf_hash, interf_addr, cb_offset,
+        } => try_configure(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr, interf_hash, interf_addr, cb_offset,),
+
+        // HandleMsg::ChangeAdmin {add, remove} => try_change_admin(deps, env, add, remove),
+
+        HandleMsg::DonateEntropy {entropy} => donate_entropy(deps, env, entropy),
+        HandleMsg::DonateEntropyRwrd {entropy} => donate_entropy_rwrd(deps, env, entropy),
 
         HandleMsg::CallbackRn {
             entropy, cb_msg, callback_code_hash, contract_addr
         } => try_callback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
 
-        HandleMsg::HcallbackRn {
+        HandleMsg::HCallbackRn {
             entropy, cb_msg, callback_code_hash, contract_addr
-        } => try_hcallback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
+        } => try_h_callback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
 
         HandleMsg::ReceiveRn {
             rn, cb_msg
@@ -134,12 +197,117 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     pad_handle_result(response, BLOCK_SIZE)
 }
 
+fn try_configure<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    forw_entropy: bool,
+    forw_entropy_to_hash: String,
+    forw_entropy_to_addr: String,
+    interf_hash: String,
+    interf_addr: String,
+    cb_offset: u32,
+) -> StdResult<HandleResponse> {
+    // check if admin
+    let admin: Admin = load_state(&mut deps.storage, ADMIN_KEY)?;
+    let admin = &admin.admin;
+    let sender = &deps.api.canonical_address(&env.message.sender)?;
+    if admin != sender {
+        return Err(StdError::generic_err(
+            "This is an admin function",
+        ));
+    }
+
+    // Change config for rng-interface (for forwarding cb_msg)
+    let new_cb_msg_config = CbMsgConfig {
+        rng_interface_hash: interf_hash,
+        rng_interface_addr: deps.api.canonical_address(&HumanAddr(interf_addr))?,
+        cb_offset: cb_offset,
+    };
+    save_state(&mut deps.storage, CB_CONFIG_KEY, &new_cb_msg_config)?;
+
+    // change Forward Entropy Config
+    let new_entrp_chk = EntrpChk {
+        forw_entropy_check: forw_entropy
+    };
+    let new_config = ForwEntrpConfig {
+        forw_entropy_to_hash: forw_entropy_to_hash,
+        forw_entropy_to_addr: forw_entropy_to_addr,
+    };
+    save_state(&mut deps.storage, ENTRP_CHK_KEY, &new_entrp_chk)?;
+    save_state(&mut deps.storage, CONFIG_KEY, &new_config)?;
+
+    Ok(HandleResponse::default())
+}
+
+
+fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+    deps: &mut Extern<S, A, Q>,
+    env: &Env,
+    entropy: T
+) -> StdResult<[u8; 32]> { 
+    debug_print!("call_rn: initiated");
+
+    //Load state (seed)
+    let mut seed: Seed = load_state(&deps.storage, SEED_KEY)?;
+
+    //Converts new entropy and old seed into a new seed
+    let new_string: String = format!("{:?}+{:?}+{:?}", entropy, seed.seed, &env.block.time);
+    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+
+    //Save Seed
+    seed.seed = new_seed;
+    save_state(&mut deps.storage, SEED_KEY, &seed)?;
+
+    //Generate random number -- chacha
+    let mut rng = ChaChaRng::from_seed(new_seed);
+
+    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+    for i in 0..dest.len() {
+        dest[i] = rng.gen();
+    }
+
+    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+
+    Ok(rn_output)
+}
+
+fn forward_entropy<S: Storage, A: Api, Q:Querier, T:std::fmt::Debug>(
+    deps: &mut Extern<S, A, Q>,
+    _env: &Env,
+    entropy: &T,
+) -> StdResult<CosmosMsg> {
+    debug_print!("forward entropy: initiated");
+    let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
+    debug_print!("forward entropy: marker 2");
+
+    if entrp_chk.forw_entropy_check == true {
+        debug_print!("forward entropy: marker 3");
+        let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
+        let donate_entropy_msg = DonateEntropyMsg::DonateEntropy {
+            entropy: format!("{:?}", entropy),
+        };
+
+        let cosmos_msg = donate_entropy_msg.to_cosmos_msg(
+        config.forw_entropy_to_hash.to_string(), 
+        HumanAddr(config.forw_entropy_to_addr.to_string()), 
+        None
+        );
+        cosmos_msg
+    }
+    else {
+        debug_print!("forward entropy: marker 4");
+        return Err(StdError::generic_err("forward entropy bool value set to false"));
+    }
+}
+
+
 pub fn try_generate_viewing_key<S: Storage, A: Api, Q: Querier> (
     deps: &mut Extern<S, A, Q>,
     env: Env,
     entropy: String
 ) -> StdResult<HandleResponse> {
-    let config: State = load_state(&mut deps.storage, STATE_KEY)?;   // changed this from CONFIG_KEY
+    let config: PrngSeed = load_state(&mut deps.storage, PRNG_KEY)?;   // changed this from CONFIG_KEY
     let prng_seed = config.prng_seed;
 
     let key = ViewingKey::new(&env, &prng_seed, (&entropy).as_ref());
@@ -157,22 +325,45 @@ pub fn try_generate_viewing_key<S: Storage, A: Api, Q: Querier> (
     })
 }
 
-pub fn donate_entropy<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+pub fn donate_entropy<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(  // donate entropy without reward; computationally lighter
     deps: &mut Extern<S, A, Q>,
     env: Env,
     entropy: T
 ) -> StdResult<HandleResponse> {
     // Load seed
-    let mut state: State = load_state(&mut deps.storage, STATE_KEY)?;
+    let mut seed: Seed = load_state(&mut deps.storage, SEED_KEY)?;
 
     // Converts new entropy and old seed into a new seed
-    let new_string: String = format!("{:?}+{:?}+{:?}", state.seed, entropy, &env.block.time);
+    let new_string: String = format!("{:?}+{:?}+{:?}", seed.seed, entropy, &env.block.time);
     let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
     let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
-    state.seed = new_seed;
+    seed.seed = new_seed;
 
-    //Save State
-    save_state(&mut deps.storage, STATE_KEY, &state)?;
+    //Save Seed
+    save_state(&mut deps.storage, SEED_KEY, &seed)?;
+
+    // debug print
+    debug_print!("entropy successfully forwarded, from {} to {}", env.message.sender, env.contract.address);
+
+    Ok(HandleResponse::default())
+}
+
+pub fn donate_entropy_rwrd<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(  // donate entropy with reward
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    entropy: T
+) -> StdResult<HandleResponse> {
+    // Load seed
+    let mut seed: Seed = load_state(&mut deps.storage, SEED_KEY)?;
+
+    // Converts new entropy and old seed into a new seed
+    let new_string: String = format!("{:?}+{:?}+{:?}", seed.seed, entropy, &env.block.time);
+    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+    seed.seed = new_seed;
+
+    //Save Seed
+    save_state(&mut deps.storage, SEED_KEY, &seed)?;
 
     // get current contract incentive pool balance
     let denom = "uscrt";
@@ -186,7 +377,7 @@ pub fn donate_entropy<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
         &balance.denom); 
 
     // debug print
-    debug_print!("debug print here: thanks for donating entropy, {}", env.message.sender);
+    debug_print!("debug print here: thanks for donating entropy, here's your reward, {}", env.message.sender);
 
     Ok(HandleResponse {
         // reward payout for caller of donate_entropy 
@@ -201,37 +392,6 @@ pub fn donate_entropy<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     })
 }
 
-fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
-    deps: &mut Extern<S, A, Q>,
-    env: &Env,
-    entropy: T
-) -> StdResult<[u8; 32]> { 
-
-    //Load state
-    let mut state: State = load_state(&deps.storage, STATE_KEY)?;
-
-    //Converts new entropy and old seed into a new seed
-    let new_string: String = format!("{:?}+{:?}+{:?}", entropy, state.seed, &env.block.time);
-    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
-    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
-
-    //Save State
-    state.seed = new_seed;
-    save_state(&mut deps.storage, STATE_KEY, &state)?;
-
-    //Generate random number -- chacha
-    let mut rng = ChaChaRng::from_seed(new_seed);
-
-    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
-    for i in 0..dest.len() {
-        dest[i] = rng.gen();
-    }
-
-    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
-
-    Ok(rn_output)
-}
-
 pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
     deps: &mut Extern<S, A, Q>,
     env: Env,
@@ -240,6 +400,7 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
     callback_code_hash: String,
     contract_addr: String
 ) -> StdResult<HandleResponse> {
+    debug_print!("try_callback_rn: initiated");
     // need to transfer at least <fee amount> when requesting random number  
     if env.message.sent_funds.last().unwrap().amount
         < MIN_FEE
@@ -253,8 +414,11 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
     ));
 }
 
+    debug_print!("try_callback_rn: passed fee check");
     // call generate RN function
-    let rn_output = call_rn(deps, &env, entropy)?;
+    let rn_output = call_rn(deps, &env, &entropy)?;
+
+    debug_print!("try_callback_rn: passed call_rn");
 
     // Send message back to consumer (to receive_rn)
     let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
@@ -268,12 +432,23 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
         None
     )?;
 
+    //Potentially forward entropy to another contract
+    debug_print!("try_callback_rn: forward entropy initiated");
+    let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy);
+    debug_print!("try_callback_rn: forward entropy done");
+
     // let cb_resp_data = to_binary(&HandleAnswer::Rn {
     //     rn: query_ans.rn_output.rn,
     // });
 
+    // create multiple messages
+    let messages = match cosmos_msg_fwd_entropy {
+        Ok(i) => vec![cosmos_msg, i],
+        Err(_) => vec![cosmos_msg],
+    };
+
     Ok(HandleResponse {
-        messages: vec![cosmos_msg],
+        messages: messages,
         log: vec![],
         data: None
         // data: Some(cb_resp_data?),
@@ -282,65 +457,48 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
     // Ok(HandleResponse::default())
 }
 
-pub fn try_hcallback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+pub fn try_h_callback_rn<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    entropy: T,
+    entropy: String,
     cb_msg: Binary,
-    callback_code_hash: String,
-    contract_addr: String
+    usr_hash: String,
+    usr_addr: String,
 ) -> StdResult<HandleResponse> {
-    // need to transfer at least <fee amount> when requesting random number  
-    if env.message.sent_funds.last().unwrap().amount
-        < MIN_FEE
-    || env.message.sent_funds.last().unwrap().denom != String::from("uscrt")
-{
-    return Err(StdError::generic_err(
-        format!("Transferred amount:{}; coin:{}. Need to transfer {} uSCRT to generate random number.",
-        env.message.sent_funds.last().unwrap().amount,
-        env.message.sent_funds.last().unwrap().denom,
-        MIN_FEE.u128()),
-    ));
-}
+    // load CbMsgConfig and the current idx (the one to be executed)
+    let config: CbMsgConfig = load_state(&deps.storage, CB_CONFIG_KEY)?;
+    let idx = idx_read(&deps.storage).load()?;
+
+    // save new idx (pointer); and save cb_msg and usr_hash and usr_addr
+    let idx_save = idx.wrapping_add(config.cb_offset);
+    idx_write(&mut deps.storage).save(&idx_save)?;
+
+    let usr_cb_store = CbMsg {
+        usr_hash: usr_hash,
+        usr_addr: deps.api.canonical_address(&HumanAddr(usr_addr))?,
+        usr_cb_msg: cb_msg,
+    };
+    write_cb_msg(&mut deps.storage, &idx_save, &usr_cb_store)?;
 
     // call generate RN function
-    let rn_output = call_rn(deps, &env, entropy)?;
+    let rn_output = call_rn(deps, &env, &entropy)?;
 
-    // trigger callback for previous user
-    //Load state
-    let mut state: State = load_state(&deps.storage, STATE_KEY)?;
-    let prev_cb_msg = state.cb_msg;
-    let prev_callback_code_hash = state.cb_code_hash;
-    let prev_contract_addr = state.contract_addr;
-
-    //save state
-    state.cb_msg = cb_msg;
-    state.cb_code_hash = callback_code_hash;
-    state.contract_addr = contract_addr; 
-    save_state(& mut deps.storage, STATE_KEY, &state)?;
-
-    // Send message back to consumer (to receive_rn)
-    let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
+    // Load (previous user) CbMsg info based on idx 
+    let prev_usr_msg = read_cb_msg(&deps.storage, &idx)?;
+    
+    // call fwd_rn handle function in rng-interface's contract
+    let fwd_rn_msg = FwdRnHandleMsg::FwdRn {
         rn: rn_output,
-        cb_msg: prev_cb_msg
+        usr_hash: prev_usr_msg.usr_hash,
+        usr_addr: prev_usr_msg.usr_addr,
+        usr_cb_msg: prev_usr_msg.usr_cb_msg,
     };
 
-    // let cosmos_msg_option = receive_rn_msg.to_cosmos_msg(
-    //     prev_callback_code_hash.to_string(), 
-    //     HumanAddr(prev_contract_addr.to_string()), 
-    //     None
-    // )?;
-
-    let cosmos_msg_option = receive_rn_msg.to_cosmos_msg(
-        prev_callback_code_hash.to_string(), 
-        HumanAddr(prev_contract_addr.to_string()), 
+    let cosmos_msg = fwd_rn_msg.to_cosmos_msg(
+        config.rng_interface_hash,
+        deps.api.human_address(&config.rng_interface_addr)?, 
         None
-    );
-
-    let cosmos_msg = match cosmos_msg_option {
-        Ok(i) => i,
-        Err(_) => return Err(StdError::generic_err("cosmos message for callback could not be created")),
-    };
+    )?;
 
     Ok(HandleResponse {
         messages: vec![cosmos_msg],
@@ -351,23 +509,90 @@ pub fn try_hcallback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     // Ok(HandleResponse::default())
 }
 
+// cb_msg offset = 1 ==========================================================
+// Put this in init handle function if using this code 
+    // let cbm_store = CbMsg {
+    //     usr_hash: env.contract_code_hash,
+    //     usr_addr: deps.api.canonical_address(&env.contract.address)?,
+    //     usr_cb_msg: Binary(String::from("Here is an initial message String").as_bytes().to_vec()),
+    // }; 
+    // save_state(&mut deps.storage, CB_MSG_KEY, &cbm_store)?;
+// ============================================================================
+// pub fn try_h_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+//     deps: &mut Extern<S, A, Q>,
+//     env: Env,
+//     entropy: T,
+//     cb_msg: Binary,
+//     callback_code_hash: String,
+//     contract_addr: String
+// ) -> StdResult<HandleResponse> {
+//     // need to transfer at least <fee amount> when requesting random number  
+//     if env.message.sent_funds.last().unwrap().amount
+//         < MIN_FEE
+//     || env.message.sent_funds.last().unwrap().denom != String::from("uscrt")
+// {
+//     return Err(StdError::generic_err(
+//         format!("Transferred amount:{}; coin:{}. Need to transfer {} uSCRT to generate random number.",
+//         env.message.sent_funds.last().unwrap().amount,
+//         env.message.sent_funds.last().unwrap().denom,
+//         MIN_FEE.u128()),
+//     ));
+// }
 
+//     // call generate RN function
+//     let rn_output = call_rn(deps, &env, entropy)?;
+
+//     // trigger callback for previous user
+//     //Load state
+//     let mut cbm_store: CbMsg = load_state(&deps.storage, CB_MSG_KEY)?;
+//     let prev_callback_code_hash = cbm_store.usr_hash;
+//     let prev_contract_addr = cbm_store.usr_addr;
+//     let prev_cb_msg = cbm_store.usr_cb_msg;
+
+//     //save cbm_store
+//     cbm_store.usr_hash = callback_code_hash;
+//     cbm_store.usr_addr = deps.api.canonical_address(&HumanAddr(contract_addr))?; 
+//     cbm_store.usr_cb_msg = cb_msg;
+//     save_state(& mut deps.storage, CB_MSG_KEY, &cbm_store)?;
+
+//     // Send message back to consumer (to receive_rn)
+//     let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
+//         rn: rn_output,
+//         cb_msg: prev_cb_msg
+//     };
+
+//     // let cosmos_msg_option = receive_rn_msg.to_cosmos_msg(
+//     //     prev_callback_code_hash.to_string(), 
+//     //     HumanAddr(prev_contract_addr.to_string()), 
+//     //     None
+//     // )?;
+
+//     let cosmos_msg_option = receive_rn_msg.to_cosmos_msg(
+//         prev_callback_code_hash.to_string(), 
+//         HumanAddr(prev_contract_addr.to_string()), 
+//         None
+//     );
+
+//     let cosmos_msg = match cosmos_msg_option {
+//         Ok(i) => i,
+//         Err(_) => return Err(StdError::generic_err("cosmos message for callback could not be created")),
+//     };
+
+//     Ok(HandleResponse {
+//         messages: vec![cosmos_msg],
+//         log: vec![],
+//         data: None
+//     })
+
+//     // Ok(HandleResponse::default())
+// }
 
 pub fn try_receive_rn<S: Storage, A: Api, Q: Querier>(  // RN consumer's handle message that continues the code
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
+    _deps: &mut Extern<S, A, Q>,
+    _env: Env,
     rn: [u8; 32],
     cb_msg: Binary,
 ) -> StdResult<HandleResponse> {
-    // let mut config: Config = load(&deps.storage, CONFIG_KEY)?;
-    // let apprv_sender = config.apprv_sender;
-    let apprv_sender = deps.api.canonical_address(&env.contract.address)?;  //<-- for user contract, set to scrt-rng's contract addr
-    let sender = deps.api.canonical_address(&env.message.sender)?;
-    if apprv_sender != sender {
-        return Err(StdError::generic_err(
-            "receive_rn did not approve sender address",
-        ));
-    }
     
     let consumer_output = format!("Original message: {:?}, combined with rn: {:?}", 
     String::from_utf8(cb_msg.as_slice().to_vec()),   // <-- will only display properly if the cb_msg input is a String
@@ -402,10 +627,10 @@ pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     entropy: T,
 ) -> QueryResult {
     // Load seed
-    let state: State = load_state(&deps.storage, STATE_KEY)?; // remove `mut`
+    let seed: Seed = load_state(&deps.storage, SEED_KEY)?; // remove `mut`
 
     // Converts new entropy and old seed into a new seed
-    let new_string: String = format!("{:?}+{:?}", state.seed, entropy);
+    let new_string: String = format!("{:?}+{:?}", seed.seed, entropy);
     let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
     let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
     
@@ -445,22 +670,31 @@ pub fn try_query_debug<S: Storage, A: Api, Q: Querier>(
     _deps: &Extern<S, A, Q>,
     _which: u32
 ) -> QueryResult {
-//FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-    // let state: State = load_state(&deps.storage, STATE_KEY)?;
-    // match which {
-    //     0 => return to_binary(&format!("seed: {:?}", state.seed)),
-    //     1 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(state.cb_msg.as_slice().to_vec()))),
-    //     2 => return to_binary(&format!("code hash: {:}", state.cb_code_hash)),
-    //     3 => return to_binary(&format!("contract addr: {:}", state.contract_addr)),
-    //     _ => return Err(StdError::generic_err("invalid number. Try 0-3"))
-    // };
+// //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
+//     let seed: Seed = load_state(&deps.storage, SEED_KEY)?;
+//     let idx: u32 = idx_read(&deps.storage).load()?;
+//     let cbm_store: CbMsg = read_cb_msg(&deps.storage, &idx)?;
+//     let admin: Admin = load_state(&deps.storage, ADMIN_KEY)?;
+//     let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
+//     let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
+//     match which {
+//         0 => return to_binary(&format!("seed: {:?}", seed.seed)),
+//         1 => return to_binary(&format!("cb_msg user code hash: {:}", cbm_store.usr_hash)),
+//         2 => return to_binary(&format!("cb_msg user addr: {:}", cbm_store.usr_addr)),
+//         3 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(cbm_store.usr_cb_msg.as_slice().to_vec()))),
+//         4 => return to_binary(&format!("cb_msg index: {:}", idx)),
+//         5 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
+//         6 => return to_binary(&format!("forward entropy hash: {:}", config.forw_entropy_to_hash)),
+//         7 => return to_binary(&format!("forward entropy addr: {:}", config.forw_entropy_to_addr)),
+//         8 => return to_binary(&format!("admin address: {:?}", deps.api.human_address(&admin.admin))),
+//         _ => return Err(StdError::generic_err("invalid number. Try 0-8"))
+//     };
 
-    // to_binary(&QueryAnswer::Seed{seed: state.seed})
+//     // to_binary(&QueryAnswer::Seed{seed: state.seed})
 
-    // /////////////////////////////////////////////////////////// 
+// // /////////////////////////////////////////////////////////// 
 
     to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
-
 }
 
 
@@ -501,10 +735,10 @@ fn try_authquery<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     // vk: String,
 ) -> StdResult<Binary> {
     // Load seed
-    let state: State = load_state(&deps.storage, STATE_KEY)?; // remove `mut`
+    let seed: Seed = load_state(&deps.storage, SEED_KEY)?; // remove `mut`
 
     // Converts new entropy and old seed into a new seed
-    let new_string: String = format!("{:?}+{:?}", state.seed, entropy);
+    let new_string: String = format!("{:?}+{:?}", seed.seed, entropy);
     let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
     let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
     
