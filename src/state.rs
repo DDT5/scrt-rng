@@ -41,8 +41,8 @@ pub struct ForwEntrpConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct Admin {
-    pub admin: CanonicalAddr,
+pub struct Admins {
+    pub admins: Vec<CanonicalAddr>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]

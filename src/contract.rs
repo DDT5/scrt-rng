@@ -12,7 +12,7 @@ use cosmwasm_std::{
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer}; //self
 use crate::state::{
-    Seed, CbMsg, EntrpChk, Admin, ForwEntrpConfig, PrngSeed, CbMsgConfig, 
+    Seed, CbMsg, EntrpChk, Admins, ForwEntrpConfig, PrngSeed, CbMsgConfig, 
     load_state, save_state, write_viewing_key, read_viewing_key, idx_read, idx_write, write_cb_msg, read_cb_msg,
     SEED_KEY, CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, CB_CONFIG_KEY,
 };  
@@ -112,8 +112,8 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     save_state(&mut deps.storage, SEED_KEY, &seed)?;
 
     // init other variables ------------------------------------------------------
-    let admin = Admin {
-        admin: deps.api.canonical_address(&env.message.sender)?,
+    let admin = Admins {
+        admins: vec![deps.api.canonical_address(&env.message.sender)?],
     };
     save_state(&mut deps.storage, ADMIN_KEY, &admin)?;
 
@@ -175,7 +175,8 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
             forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr, interf_hash, interf_addr, cb_offset,
         } => try_configure(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr, interf_hash, interf_addr, cb_offset,),
 
-        // HandleMsg::ChangeAdmin {add, remove} => try_change_admin(deps, env, add, remove),
+        HandleMsg::AddAdmin {add} => try_add_admin(deps, env, add),
+        HandleMsg::RemoveAdmin {remove} => try_remove_admin(deps, env, remove),
 
         HandleMsg::DonateEntropy {entropy} => donate_entropy(deps, env, entropy),
         HandleMsg::DonateEntropyRwrd {entropy} => donate_entropy_rwrd(deps, env, entropy),
@@ -193,6 +194,8 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
         } => try_receive_rn(deps, env, rn, cb_msg),
 
         HandleMsg::GenerateViewingKey {entropy, .. } => try_generate_viewing_key(deps, env, entropy),
+
+        HandleMsg::HandleAQuery {entropy, callback_code_hash, contract_addr} => try_handle_a_query(deps, entropy, callback_code_hash, contract_addr),
     };
     pad_handle_result(response, BLOCK_SIZE)
 }
@@ -208,10 +211,10 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
     cb_offset: u32,
 ) -> StdResult<HandleResponse> {
     // check if admin
-    let admin: Admin = load_state(&mut deps.storage, ADMIN_KEY)?;
-    let admin = &admin.admin;
+    let admins_vec: Admins = load_state(&mut deps.storage, ADMIN_KEY)?;
+    let admins = &admins_vec.admins;
     let sender = &deps.api.canonical_address(&env.message.sender)?;
-    if admin != sender {
+    if !admins.contains(&sender) {
         return Err(StdError::generic_err(
             "This is an admin function",
         ));
@@ -239,6 +242,60 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
     Ok(HandleResponse::default())
 }
 
+fn try_add_admin<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    add: String,
+) -> StdResult<HandleResponse> {
+    // check if admin
+    let mut admins_vec: Admins = load_state(&mut deps.storage, ADMIN_KEY)?;
+    check_admin(deps, &env, &admins_vec)?;
+    
+    // add admin
+    admins_vec.admins.extend(deps.api.canonical_address(&HumanAddr(add)));
+    save_state(&mut deps.storage, ADMIN_KEY, &admins_vec.admins)?;
+
+    Ok(HandleResponse::default())
+}
+
+fn try_remove_admin<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    remove: String,
+) -> StdResult<HandleResponse> {
+    // check if admin
+    let mut admins_vec: Admins = load_state(&mut deps.storage, ADMIN_KEY)?;
+    check_admin(deps, &env, &admins_vec)?;
+
+    // cannot remove creator
+    let remove_canon = deps.api.canonical_address(&HumanAddr(remove))?;
+    if remove_canon == admins_vec.admins[0] {
+        return Err(StdError::generic_err(
+            "Cannot remove creator as admin"
+        ));
+    }
+
+    // remove admin
+    admins_vec.admins.retain(|x| x != &remove_canon);
+    save_state(&mut deps.storage, ADMIN_KEY, &admins_vec.admins)?;
+
+    Ok(HandleResponse::default())
+}
+
+fn check_admin<S: Storage, A: Api, Q:Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: &Env,
+    admins_vec: &Admins, 
+) -> StdResult<()> {
+    let admins = &admins_vec.admins;
+    let sender = &deps.api.canonical_address(&env.message.sender)?;
+    if !admins.contains(&sender) {
+        return Err(StdError::generic_err(
+            "This is an admin function",
+        ));
+    }
+    Ok(())
+}
 
 fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     deps: &mut Extern<S, A, Q>,
@@ -284,10 +341,13 @@ fn forward_entropy<S: Storage, A: Api, Q:Querier, T:std::fmt::Debug>(
     if entrp_chk.forw_entropy_check == true {
         debug_print!("forward entropy: marker 3");
         let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
+        let entropy_hashed_full = &sha2::Sha256::digest(format!("{:?}", &entropy).as_bytes());
+        // forward a String of the first 32 bits; saves a bit of gas vs sending the whole 256bit String:
+        let entropy_hashed = &entropy_hashed_full.as_slice()[0..4]; 
         let donate_entropy_msg = DonateEntropyMsg::DonateEntropy {
-            entropy: format!("{:?}", entropy),
+            entropy: format!("{:?}", &entropy_hashed),
         };
-
+        debug_print!("entropy String forwarded: {:?}", entropy_hashed);
         let cosmos_msg = donate_entropy_msg.to_cosmos_msg(
         config.forw_entropy_to_hash.to_string(), 
         HumanAddr(config.forw_entropy_to_addr.to_string()), 
@@ -605,6 +665,29 @@ pub fn try_receive_rn<S: Storage, A: Api, Q: Querier>(  // RN consumer's handle 
     })
 }
 
+pub fn try_handle_a_query<S: Storage, A: Api, Q:Querier>(
+    deps: &Extern<S, A, Q>,
+    entropy: String,
+    callback_code_hash: String, 
+    contract_addr: String
+) -> StdResult<HandleResponse> {
+    let query_msg = QueryRnMsg::QueryRn {entropy: entropy};
+    let query_ans: QueryAnswerMsg = query_msg.query(   //: StdResult<Binary>   QueryAnswerMsg 
+        &deps.querier, 
+        callback_code_hash.to_string(), 
+        HumanAddr(contract_addr.to_string()),
+    )?;
+
+    let output_log = format!("{:?}", query_ans.rn_output.rn);
+
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![log("output", output_log)],
+        data: None,
+    })
+    
+}
+
 /////////////////////////////////////////////////////////////////////////////////
 // Query functions 
 /////////////////////////////////////////////////////////////////////////////////
@@ -667,34 +750,41 @@ pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
 
 
 pub fn try_query_debug<S: Storage, A: Api, Q: Querier>(
-    _deps: &Extern<S, A, Q>,
-    _which: u32
+    deps: &Extern<S, A, Q>,
+    which: u32
 ) -> QueryResult {
-// //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-//     let seed: Seed = load_state(&deps.storage, SEED_KEY)?;
-//     let idx: u32 = idx_read(&deps.storage).load()?;
-//     let cbm_store: CbMsg = read_cb_msg(&deps.storage, &idx)?;
-//     let admin: Admin = load_state(&deps.storage, ADMIN_KEY)?;
-//     let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
-//     let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
-//     match which {
-//         0 => return to_binary(&format!("seed: {:?}", seed.seed)),
-//         1 => return to_binary(&format!("cb_msg user code hash: {:}", cbm_store.usr_hash)),
-//         2 => return to_binary(&format!("cb_msg user addr: {:}", cbm_store.usr_addr)),
-//         3 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(cbm_store.usr_cb_msg.as_slice().to_vec()))),
-//         4 => return to_binary(&format!("cb_msg index: {:}", idx)),
-//         5 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
-//         6 => return to_binary(&format!("forward entropy hash: {:}", config.forw_entropy_to_hash)),
-//         7 => return to_binary(&format!("forward entropy addr: {:}", config.forw_entropy_to_addr)),
-//         8 => return to_binary(&format!("admin address: {:?}", deps.api.human_address(&admin.admin))),
-//         _ => return Err(StdError::generic_err("invalid number. Try 0-8"))
-//     };
+//FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
+    let seed: Seed = load_state(&deps.storage, SEED_KEY)?;
+    let idx: u32 = idx_read(&deps.storage).load()?;
+    let cbm_store: CbMsg = read_cb_msg(&deps.storage, &idx)?;
+    let admins: Admins = load_state(&deps.storage, ADMIN_KEY)?;
+    let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
+    let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
 
-//     // to_binary(&QueryAnswer::Seed{seed: state.seed})
+    // Human Addr for admins
+    let mut admin_human: Vec<HumanAddr> = vec![];
+    for admin in admins.admins {
+        admin_human.push(deps.api.human_address(&admin)?)
+    }
 
-// // /////////////////////////////////////////////////////////// 
+    match which {
+        0 => return to_binary(&format!("seed: {:?}", seed.seed)),
+        1 => return to_binary(&format!("cb_msg user code hash: {:}", cbm_store.usr_hash)),
+        2 => return to_binary(&format!("cb_msg user addr: {:}", cbm_store.usr_addr)),
+        3 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(cbm_store.usr_cb_msg.as_slice().to_vec()))),
+        4 => return to_binary(&format!("cb_msg index: {:}", idx)),
+        5 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
+        6 => return to_binary(&format!("forward entropy hash: {:}", config.forw_entropy_to_hash)),
+        7 => return to_binary(&format!("forward entropy addr: {:}", config.forw_entropy_to_addr)),
+        8 => return to_binary(&format!("admin address: {:?}", admin_human)),
+        _ => return Err(StdError::generic_err("invalid number. Try 0-8"))
+    };
 
-    to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
+    // to_binary(&QueryAnswer::Seed{seed: state.seed})
+
+// /////////////////////////////////////////////////////////// 
+
+    // to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
 }
 
 

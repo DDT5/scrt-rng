@@ -22,10 +22,8 @@ pub enum HandleMsg {
         interf_addr: String, 
         cb_offset: u32,
     },
-    // ChangeAdmin {
-    //     add: String,
-    //     remove: String
-    // },
+    AddAdmin {add: String},
+    RemoveAdmin {remove: String},
 
     DonateEntropy {entropy: String},
     DonateEntropyRwrd {entropy: String},
@@ -40,6 +38,8 @@ pub enum HandleMsg {
         entropy: String,
         padding: Option<String>,
     },
+
+    HandleAQuery {entropy: String, callback_code_hash: String, contract_addr: String},
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]  //, PartialEq
