@@ -750,41 +750,41 @@ pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
 
 
 pub fn try_query_debug<S: Storage, A: Api, Q: Querier>(
-    deps: &Extern<S, A, Q>,
-    which: u32
+    _deps: &Extern<S, A, Q>,
+    _which: u32
 ) -> QueryResult {
 //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-    let seed: Seed = load_state(&deps.storage, SEED_KEY)?;
-    let idx: u32 = idx_read(&deps.storage).load()?;
-    let cbm_store: CbMsg = read_cb_msg(&deps.storage, &idx)?;
-    let admins: Admins = load_state(&deps.storage, ADMIN_KEY)?;
-    let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
-    let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
+    // let seed: Seed = load_state(&deps.storage, SEED_KEY)?;
+    // let idx: u32 = idx_read(&deps.storage).load()?;
+    // let cbm_store: CbMsg = read_cb_msg(&deps.storage, &idx)?;
+    // let admins: Admins = load_state(&deps.storage, ADMIN_KEY)?;
+    // let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
+    // let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
 
-    // Human Addr for admins
-    let mut admin_human: Vec<HumanAddr> = vec![];
-    for admin in admins.admins {
-        admin_human.push(deps.api.human_address(&admin)?)
-    }
+    // // Human Addr for admins
+    // let mut admin_human: Vec<HumanAddr> = vec![];
+    // for admin in admins.admins {
+    //     admin_human.push(deps.api.human_address(&admin)?)
+    // }
 
-    match which {
-        0 => return to_binary(&format!("seed: {:?}", seed.seed)),
-        1 => return to_binary(&format!("cb_msg user code hash: {:}", cbm_store.usr_hash)),
-        2 => return to_binary(&format!("cb_msg user addr: {:}", cbm_store.usr_addr)),
-        3 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(cbm_store.usr_cb_msg.as_slice().to_vec()))),
-        4 => return to_binary(&format!("cb_msg index: {:}", idx)),
-        5 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
-        6 => return to_binary(&format!("forward entropy hash: {:}", config.forw_entropy_to_hash)),
-        7 => return to_binary(&format!("forward entropy addr: {:}", config.forw_entropy_to_addr)),
-        8 => return to_binary(&format!("admin address: {:?}", admin_human)),
-        _ => return Err(StdError::generic_err("invalid number. Try 0-8"))
-    };
+    // match which {
+    //     0 => return to_binary(&format!("seed: {:?}", seed.seed)),
+    //     1 => return to_binary(&format!("cb_msg user code hash: {:}", cbm_store.usr_hash)),
+    //     2 => return to_binary(&format!("cb_msg user addr: {:}", cbm_store.usr_addr)),
+    //     3 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(cbm_store.usr_cb_msg.as_slice().to_vec()))),
+    //     4 => return to_binary(&format!("cb_msg index: {:}", idx)),
+    //     5 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
+    //     6 => return to_binary(&format!("forward entropy hash: {:}", config.forw_entropy_to_hash)),
+    //     7 => return to_binary(&format!("forward entropy addr: {:}", config.forw_entropy_to_addr)),
+    //     8 => return to_binary(&format!("admin address: {:?}", admin_human)),
+    //     _ => return Err(StdError::generic_err("invalid number. Try 0-8"))
+    // };
 
     // to_binary(&QueryAnswer::Seed{seed: state.seed})
 
 // /////////////////////////////////////////////////////////// 
 
-    // to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
+    to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
 }
 
 
