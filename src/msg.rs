@@ -7,23 +7,30 @@ use crate::viewing_key::ViewingKey;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InitMsg {
     pub initseed: String,
+    pub cb_offset: u32,
     pub prng_seed: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleMsg {
-    EntropyString {entropy: String},
-    // EntropyBool {entropy: bool},
-    // EntropyInt {entropy: i32},
-    // EntropyChar {entropy: char},
-    
-    RnString {entropy: String},
-    // RnBool {entropy: bool},
-    // RnInt {entropy: i32},
-    // RnChar {entropy: char},
+    Configure {   // for admin to configure parameters
+        forw_entropy: bool,
+        forw_entropy_to_hash: Vec<String>,
+        forw_entropy_to_addr: Vec<String>,
+        interf_hash: String, 
+        interf_addr: String, 
+        cb_offset: u32,
+    },
+    AddAdmin {add: String},
+    RemoveAdmin {remove: String},
+
+    DonateEntropy {entropy: String},
+    DonateEntropyRwrd {entropy: String},
 
     CallbackRn {entropy: String, cb_msg: Binary, callback_code_hash: String, contract_addr: String},
+
+    HCallbackRn {entropy: String, cb_msg: Binary, callback_code_hash: String, contract_addr: String},
 
     ReceiveRn {rn: [u8; 32], cb_msg: Binary},
 
@@ -31,6 +38,8 @@ pub enum HandleMsg {
         entropy: String,
         padding: Option<String>,
     },
+
+    HandleAQuery {entropy: String, callback_code_hash: String, contract_addr: String},
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]  //, PartialEq
@@ -52,7 +61,7 @@ pub enum QueryMsg {
     QueryRn {entropy: String},
     QueryAQuery {entropy: String, callback_code_hash: String, contract_addr: String},
     AuthQuery {entropy: String, addr: HumanAddr, vk: String},
-    QuerySeed {} // <--- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
+    QueryDebug {which: u32} // <--- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
 }
 
 impl QueryMsg {
