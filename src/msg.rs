@@ -16,8 +16,8 @@ pub struct InitMsg {
 pub enum HandleMsg {
     Configure {   // for admin to configure parameters
         forw_entropy: bool,
-        forw_entropy_to_hash: String,
-        forw_entropy_to_addr: String,
+        forw_entropy_to_hash: Vec<String>,
+        forw_entropy_to_addr: Vec<String>,
         interf_hash: String, 
         interf_addr: String, 
         cb_offset: u32,

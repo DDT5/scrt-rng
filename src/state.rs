@@ -14,7 +14,7 @@ pub const CB_MSG_KEY: &[u8] = b"cbmsg";
 pub static IDX_KEY: &[u8] = b"index";
 pub const ENTRP_CHK_KEY: &[u8] = b"entropycheck";
 pub const CB_CONFIG_KEY: &[u8] = b"cbconfig";
-pub const CONFIG_KEY: &[u8] = b"config";
+pub const CONFIG_KEY: &[u8] = b"config"; //forward entropy config
 pub const ADMIN_KEY: &[u8] = b"admin";
 pub const PREFIX_VIEWING_KEY: &[u8] = b"viewingkey";
 
@@ -36,8 +36,8 @@ pub struct EntrpChk {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ForwEntrpConfig {
-    pub forw_entropy_to_hash: String,
-    pub forw_entropy_to_addr: String,
+    pub forw_entropy_to_hash: Vec<String>,
+    pub forw_entropy_to_addr: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

@@ -123,8 +123,8 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     save_state(&mut deps.storage, ENTRP_CHK_KEY, &entrp_chk)?;
 
     let config = ForwEntrpConfig {
-        forw_entropy_to_hash: String::default(),
-        forw_entropy_to_addr: String::default(),
+        forw_entropy_to_hash: vec![String::default()],
+        forw_entropy_to_addr: vec![String::default()],
     };
     save_state(&mut deps.storage, CONFIG_KEY, &config)?;
 
@@ -204,8 +204,8 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     forw_entropy: bool,
-    forw_entropy_to_hash: String,
-    forw_entropy_to_addr: String,
+    forw_entropy_to_hash: Vec<String>,
+    forw_entropy_to_addr: Vec<String>,
     interf_hash: String,
     interf_addr: String,
     cb_offset: u32,
@@ -333,7 +333,7 @@ fn forward_entropy<S: Storage, A: Api, Q:Querier, T:std::fmt::Debug>(
     deps: &mut Extern<S, A, Q>,
     _env: &Env,
     entropy: &T,
-) -> StdResult<CosmosMsg> {
+) -> StdResult<Option<Vec<CosmosMsg>>> {
     debug_print!("forward entropy: initiated");
     let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
     debug_print!("forward entropy: marker 2");
@@ -348,16 +348,22 @@ fn forward_entropy<S: Storage, A: Api, Q:Querier, T:std::fmt::Debug>(
             entropy: format!("{:?}", &entropy_hashed),
         };
         debug_print!("entropy String forwarded: {:?}", entropy_hashed);
-        let cosmos_msg = donate_entropy_msg.to_cosmos_msg(
-        config.forw_entropy_to_hash.to_string(), 
-        HumanAddr(config.forw_entropy_to_addr.to_string()), 
-        None
-        );
-        cosmos_msg
+        
+        let mut cosmos_msgs = vec![];
+        for i in 0..config.forw_entropy_to_hash.len() {
+            cosmos_msgs.push(
+                donate_entropy_msg.to_cosmos_msg(
+                config.forw_entropy_to_hash[i].to_string(), 
+                HumanAddr(config.forw_entropy_to_addr[i].to_string()), 
+                None
+                )?
+            );
+        }
+        Ok(Some(cosmos_msgs))
     }
     else {
         debug_print!("forward entropy: marker 4");
-        return Err(StdError::generic_err("forward entropy bool value set to false"));
+        Ok(None)
     }
 }
 
@@ -494,24 +500,25 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
 
     //Potentially forward entropy to another contract
     debug_print!("try_callback_rn: forward entropy initiated");
-    let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy);
+    let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
     debug_print!("try_callback_rn: forward entropy done");
 
-    // let cb_resp_data = to_binary(&HandleAnswer::Rn {
-    //     rn: query_ans.rn_output.rn,
-    // });
-
     // create multiple messages
-    let messages = match cosmos_msg_fwd_entropy {
-        Ok(i) => vec![cosmos_msg, i],
-        Err(_) => vec![cosmos_msg],
+    let mut messages = vec![cosmos_msg];
+    match cosmos_msg_fwd_entropy {
+        Some(mut i) => messages.append(&mut i),
+        None => (),
     };
+
+    let cb_resp_data = to_binary(&HandleAnswer::Rn {
+        rn: rn_output,
+    });
 
     Ok(HandleResponse {
         messages: messages,
         log: vec![],
-        data: None
-        // data: Some(cb_resp_data?),
+        // data: None
+        data: Some(cb_resp_data?),
     })
 
     // Ok(HandleResponse::default())
@@ -774,13 +781,11 @@ pub fn try_query_debug<S: Storage, A: Api, Q: Querier>(
     //     3 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(cbm_store.usr_cb_msg.as_slice().to_vec()))),
     //     4 => return to_binary(&format!("cb_msg index: {:}", idx)),
     //     5 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
-    //     6 => return to_binary(&format!("forward entropy hash: {:}", config.forw_entropy_to_hash)),
-    //     7 => return to_binary(&format!("forward entropy addr: {:}", config.forw_entropy_to_addr)),
+    //     6 => return to_binary(&format!("forward entropy hash: {:?}", config.forw_entropy_to_hash)),
+    //     7 => return to_binary(&format!("forward entropy addr: {:?}", config.forw_entropy_to_addr)),
     //     8 => return to_binary(&format!("admin address: {:?}", admin_human)),
     //     _ => return Err(StdError::generic_err("invalid number. Try 0-8"))
     // };
-
-    // to_binary(&QueryAnswer::Seed{seed: state.seed})
 
 // /////////////////////////////////////////////////////////// 
 
@@ -850,52 +855,87 @@ fn try_authquery<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
 // Unit tests
 /////////////////////////////////////////////////////////////////////////////////
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use cosmwasm_std::testing::{mock_dependencies, mock_env};
-//     use cosmwasm_std::{coins, StdError};  //, from_binary
-//     // use serde::__private::de::IdentifierDeserializer;
+#[cfg(test)]
+mod tests {
+    // use std::fmt::Result;
 
-//     #[test]
-//     fn call_rn_changes_rn() {
-//         let mut deps = mock_dependencies(20, &coins(2, "token"));
+    use super::*;
+    use cosmwasm_std::testing::{mock_dependencies, mock_env};
+    use cosmwasm_std::{coins};  //StdError, from_binary
+    // use serde::__private::de::IdentifierDeserializer;
 
-//         let env = mock_env("creator", &coins(2, "token"));
-//         let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed")};
-//         let _res = init(&mut deps, env, msg).unwrap();
+    #[test]
+    fn call_rn_changes_rn() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let env = mock_env("creator", &coins(2, "token"));
+        let msg = InitMsg {initseed: String::from("initseed input String"), cb_offset: 1, prng_seed: String::from("seed string here")};
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        let seed1: Seed = match load_state(&mut deps.storage, SEED_KEY) {
+            Ok(i) => i,
+            Err(_) => panic!("no seed loaded"),
+        };
+        let env = mock_env("RN user", &coins(MIN_FEE.u128(), "uscrt"));
+        let msg = HandleMsg::CallbackRn {entropy: String::from("foo bar"), cb_msg: Binary(String::from("cb_msg").as_bytes().to_vec()), callback_code_hash: "hash".to_string(), contract_addr: "addr".to_string()};
+
+        let env1 = env.clone();
+        let msg1 = msg.clone();
+        let res1 = &handle(&mut deps, env1, msg1).unwrap().data;
+        let seed2: Seed = match load_state(&mut deps.storage, SEED_KEY) {
+            Ok(i) => i,
+            Err(_) => panic!("no seed loaded"),
+        };
+
+        let env2 = env.clone();
+        let msg2 = msg.clone();
+        let res2 = &handle(&mut deps, env2, msg2).unwrap().data;
+
+        assert_eq!(seed1.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
+        assert_ne!(seed2.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
+        assert_ne!(res1, res2);
+    }
+
+    #[test]
+    fn donate_entropy_changes_seed() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let env = mock_env("creator", &coins(2, "token"));
+        let msg = InitMsg {initseed: String::from("initseed input String"), cb_offset: 1, prng_seed: String::from("seed string here")};
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        let seed1: Seed = match load_state(&mut deps.storage, SEED_KEY) {
+            Ok(i) => i,
+            Err(_) => panic!("no seed loaded"),
+        };
+        let env = mock_env("RN user", &coins(0, "token"));
+        let msg = HandleMsg::DonateEntropy {entropy: String::from("foo bar")};
+        let _res = &handle(&mut deps, env, msg).unwrap().data;
+        let seed2: Seed = match load_state(&mut deps.storage, SEED_KEY) {
+            Ok(i) => i,
+            Err(_) => panic!("no seed loaded"),
+        };
+
+        assert_eq!(seed1.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
+        assert_ne!(seed2.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
+    }
+
+
+    // #[test]
+    // fn call_rn_requires_min_fee() {
+    //     let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+    //     let env = mock_env("creator", &coins(2, "token"));
+    //     let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed")};
+    //     let _res = init(&mut deps, env, msg).unwrap();
         
-//         let env = mock_env("RN user", &coins(MIN_FEE.u128(), "uscrt"));
-//         let msg = HandleMsg::RnString {entropy: String::from("String input")};
-//         let res1 = call_rn(&mut deps, env, msg).unwrap().data;
-        
-//         let env = mock_env("RN user", &coins(MIN_FEE.u128(), "uscrt"));
-//         let msg = HandleMsg::RnString {entropy: String::from("String input")};
-//         let res2 = call_rn(&mut deps, env, msg).unwrap().data;
+    //     let env = mock_env("RN user", &coins(MIN_FEE.u128()-1, "uscrt"));
+    //     let msg = HandleMsg::RnString {entropy: String::from("String input")};
+    //     let res = call_rn(&mut deps, env, msg);
 
-//         assert_ne!(res1, res2);
-//     }
-
-//     #[test]
-//     fn call_rn_requires_min_fee() {
-//         let mut deps = mock_dependencies(20, &coins(2, "token"));
-
-//         let env = mock_env("creator", &coins(2, "token"));
-//         let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed")};
-//         let _res = init(&mut deps, env, msg).unwrap();
-        
-//         let env = mock_env("RN user", &coins(MIN_FEE.u128()-1, "uscrt"));
-//         let msg = HandleMsg::RnString {entropy: String::from("String input")};
-//         let res = call_rn(&mut deps, env, msg);
-
-//         match res {
-//             Err(StdError::GenericErr {..}) => {}
-//             _ => panic!("Should return inadequate fee error"),
-//         }
-//     }
-
-//     #[test]
-//     fn donate_entropy_changes_seed() {
-//         // WIP
-//     }
-// }
+    //     match res {
+    //         Err(StdError::GenericErr {..}) => {}
+    //         _ => panic!("Should return inadequate fee error"),
+    //     }
+    // }
+}
