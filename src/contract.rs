@@ -12,9 +12,9 @@ use cosmwasm_std::{
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer}; //self
 use crate::state::{
-    Seed, CbMsg, EntrpChk, Admins, ForwEntrpConfig, PrngSeed, CbMsgConfig, 
-    load_state, save_state, write_viewing_key, read_viewing_key, idx_read, idx_write, write_cb_msg, read_cb_msg,
-    SEED_KEY, CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, CB_CONFIG_KEY,
+    Seed, EntrpChk, Admins, ForwEntrpConfig, PrngSeed, RnStorKy, RnStorVl,
+    load_state, save_state, write_viewing_key, read_viewing_key, idx_read, idx_write, write_rn_store, read_rn_store, remove_rn_store,
+    SEED_KEY, FW_CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY,
 };  
 use crate::viewing_key::{ViewingKey}; //self, 
 use crate::viewing_key::VIEWING_KEY_SIZE;
@@ -37,7 +37,7 @@ pub const MIN_FEE: Uint128 = Uint128(100_000); /* 1mn uscrt = 1 SCRT */
 /////////////////////////////////////////////////////////////////////////////////
 
 
-// Calling receive_rn handle in user's contract
+// Calling receive_rn handle in user's contract ("Option 1")
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiveRnHandleMsg {
@@ -48,17 +48,16 @@ impl HandleCallback for ReceiveRnHandleMsg {
     const BLOCK_SIZE: usize = BLOCK_SIZE;
 }
 
-// Calling forward_rn handle in rng-interface's contract
+// Calling receive_transmit_rn handle in receiver's contract ("Option 2")
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum FwdRnHandleMsg {
-    FwdRn {rn: [u8; 32], usr_cb_msg: Binary, usr_hash: String, usr_addr: CanonicalAddr},
+pub enum ReceiveTrRnHandleMsg {
+    ReceiveTrRn {rn: [u8; 32], cb_msg: Binary, user: CanonicalAddr, purpose: Option<String>},
 }
 
-impl HandleCallback for FwdRnHandleMsg {
+impl HandleCallback for ReceiveTrRnHandleMsg {
     const BLOCK_SIZE: usize = BLOCK_SIZE;
 }
-
 
 // Calling donate_entropy in another contract
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -126,33 +125,12 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
         forw_entropy_to_hash: vec![String::default()],
         forw_entropy_to_addr: vec![String::default()],
     };
-    save_state(&mut deps.storage, CONFIG_KEY, &config)?;
+    save_state(&mut deps.storage, FW_CONFIG_KEY, &config)?;
 
     let pseed = PrngSeed {
         prng_seed: sha_256(base64::encode(msg.prng_seed).as_bytes()).to_vec(),
     };
     save_state(&mut deps.storage, PRNG_KEY, &pseed)?;
-
-    // Init CbMsg for h_callback_rn ----------------------------------------------
-    let cb_msg_config = CbMsgConfig {
-        rng_interface_hash: String::default(), // to be properly set later through config
-        rng_interface_addr: CanonicalAddr::default(), // to be properly set later through config
-        cb_offset: msg.cb_offset,
-    };
-    save_state(&mut deps.storage, CB_CONFIG_KEY, &cb_msg_config)?;
-
-    let usr_cb_store = CbMsg {
-        usr_hash: env.contract_code_hash.to_string(), // sends to receive_rn function in scrt-rng contract
-        usr_addr: deps.api.canonical_address(&env.contract.address)?,
-        usr_cb_msg: Binary(String::from("initial cb_msg").as_bytes().to_vec()),
-    };
-
-    // loop to initialize cb_msg storage based on callback_offset
-    let mut id = 0u32;
-    while id < msg.cb_offset {
-        write_cb_msg(&mut deps.storage, &id, &usr_cb_store)?;
-        id += 1;
-    }
 
     // initialize cb_msg index (pointer) to 0
     idx_write(&mut deps.storage).save(&0u32)?;
@@ -172,8 +150,8 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
 ) -> StdResult <HandleResponse> {
     let response = match msg {
         HandleMsg::Configure {
-            forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr, interf_hash, interf_addr, cb_offset,
-        } => try_configure(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr, interf_hash, interf_addr, cb_offset,),
+            forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr,
+        } => try_configure(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr),
 
         HandleMsg::AddAdmin {add} => try_add_admin(deps, env, add),
         HandleMsg::RemoveAdmin {remove} => try_remove_admin(deps, env, remove),
@@ -181,13 +159,19 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
         HandleMsg::DonateEntropy {entropy} => donate_entropy(deps, env, entropy),
         HandleMsg::DonateEntropyRwrd {entropy} => donate_entropy_rwrd(deps, env, entropy),
 
+        HandleMsg::RequestRn {entropy} => try_request_rn(deps, env, entropy),
+
         HandleMsg::CallbackRn {
             entropy, cb_msg, callback_code_hash, contract_addr
         } => try_callback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
 
-        HandleMsg::HCallbackRn {
-            entropy, cb_msg, callback_code_hash, contract_addr
-        } => try_h_callback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
+        HandleMsg::CreateRn {
+            entropy, cb_msg, usr_addr, receiver_code_hash, receiver_addr, purpose, max_blk_delay
+        } => try_create_rn(deps, env, entropy, cb_msg, usr_addr, receiver_code_hash, receiver_addr, purpose, max_blk_delay),
+
+        HandleMsg::FulfillRn {
+            receiver_code_hash, receiver_addr, purpose
+        } => try_fulfill_rn(deps, env, receiver_code_hash, receiver_addr, purpose),
 
         HandleMsg::ReceiveRn {
             rn, cb_msg
@@ -206,9 +190,6 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
     forw_entropy: bool,
     forw_entropy_to_hash: Vec<String>,
     forw_entropy_to_addr: Vec<String>,
-    interf_hash: String,
-    interf_addr: String,
-    cb_offset: u32,
 ) -> StdResult<HandleResponse> {
     // check if admin
     let admins_vec: Admins = load_state(&mut deps.storage, ADMIN_KEY)?;
@@ -220,14 +201,6 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
         ));
     }
 
-    // Change config for rng-interface (for forwarding cb_msg)
-    let new_cb_msg_config = CbMsgConfig {
-        rng_interface_hash: interf_hash,
-        rng_interface_addr: deps.api.canonical_address(&HumanAddr(interf_addr))?,
-        cb_offset: cb_offset,
-    };
-    save_state(&mut deps.storage, CB_CONFIG_KEY, &new_cb_msg_config)?;
-
     // change Forward Entropy Config
     let new_entrp_chk = EntrpChk {
         forw_entropy_check: forw_entropy
@@ -237,7 +210,7 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
         forw_entropy_to_addr: forw_entropy_to_addr,
     };
     save_state(&mut deps.storage, ENTRP_CHK_KEY, &new_entrp_chk)?;
-    save_state(&mut deps.storage, CONFIG_KEY, &new_config)?;
+    save_state(&mut deps.storage, FW_CONFIG_KEY, &new_config)?;
 
     Ok(HandleResponse::default())
 }
@@ -297,12 +270,12 @@ fn check_admin<S: Storage, A: Api, Q:Querier>(
     Ok(())
 }
 
-fn call_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+fn get_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     deps: &mut Extern<S, A, Q>,
     env: &Env,
     entropy: T
 ) -> StdResult<[u8; 32]> { 
-    debug_print!("call_rn: initiated");
+    debug_print!("get_rn: initiated");
 
     //Load state (seed)
     let mut seed: Seed = load_state(&deps.storage, SEED_KEY)?;
@@ -340,7 +313,7 @@ fn forward_entropy<S: Storage, A: Api, Q:Querier, T:std::fmt::Debug>(
 
     if entrp_chk.forw_entropy_check == true {
         debug_print!("forward entropy: marker 3");
-        let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
+        let config: ForwEntrpConfig = load_state(&deps.storage, FW_CONFIG_KEY)?;
         let entropy_hashed_full = &sha2::Sha256::digest(format!("{:?}", &entropy).as_bytes());
         // forward a String of the first 32 bits; saves a bit of gas vs sending the whole 256bit String:
         let entropy_hashed = &entropy_hashed_full.as_slice()[0..4]; 
@@ -458,6 +431,21 @@ pub fn donate_entropy_rwrd<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(  
     })
 }
 
+pub fn try_request_rn<S:Storage, A:Api, Q:Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    entropy: String,
+) -> StdResult<HandleResponse> {
+    let rn_output = get_rn(deps, &env, &entropy)?;
+    Ok(HandleResponse {
+        messages: vec![],
+        log: vec![],
+        data: Some(to_binary(&HandleAnswer::Rn {
+            rn: rn_output,
+            })?)
+    })
+}
+
 pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   // 
     deps: &mut Extern<S, A, Q>,
     env: Env,
@@ -482,9 +470,9 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
 
     debug_print!("try_callback_rn: passed fee check");
     // call generate RN function
-    let rn_output = call_rn(deps, &env, &entropy)?;
+    let rn_output = get_rn(deps, &env, &entropy)?;
 
-    debug_print!("try_callback_rn: passed call_rn");
+    debug_print!("try_callback_rn: passed get_rn");
 
     // Send message back to consumer (to receive_rn)
     let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
@@ -518,142 +506,208 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
         messages: messages,
         log: vec![],
         // data: None
-        data: Some(cb_resp_data?),
+        data: Some(cb_resp_data?), //FOR DEBUGGING --- REMOVE FOR FINAL IMPLEMENTATION
     })
 
     // Ok(HandleResponse::default())
 }
 
-pub fn try_h_callback_rn<S: Storage, A: Api, Q: Querier>(
+/// Step 1 of "Option2". creates RN and potentially emits messages to forward entropy
+pub fn try_create_rn<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     entropy: String,
     cb_msg: Binary,
-    usr_hash: String,
-    usr_addr: String,
+    usr_addr: Option<String>,
+    receiver_code_hash: String, 
+    receiver_addr: String, 
+    purpose: Option<String>,
+    max_blk_delay: Option<u64>,
 ) -> StdResult<HandleResponse> {
-    // load CbMsgConfig and the current idx (the one to be executed)
-    let config: CbMsgConfig = load_state(&deps.storage, CB_CONFIG_KEY)?;
-    let idx = idx_read(&deps.storage).load()?;
-
-    // save new idx (pointer); and save cb_msg and usr_hash and usr_addr
-    let idx_save = idx.wrapping_add(config.cb_offset);
-    idx_write(&mut deps.storage).save(&idx_save)?;
-
-    let usr_cb_store = CbMsg {
-        usr_hash: usr_hash,
-        usr_addr: deps.api.canonical_address(&HumanAddr(usr_addr))?,
-        usr_cb_msg: cb_msg,
-    };
-    write_cb_msg(&mut deps.storage, &idx_save, &usr_cb_store)?;
-
-    // call generate RN function
-    let rn_output = call_rn(deps, &env, &entropy)?;
-
-    // Load (previous user) CbMsg info based on idx 
-    let prev_usr_msg = read_cb_msg(&deps.storage, &idx)?;
-    
-    // call fwd_rn handle function in rng-interface's contract
-    let fwd_rn_msg = FwdRnHandleMsg::FwdRn {
-        rn: rn_output,
-        usr_hash: prev_usr_msg.usr_hash,
-        usr_addr: prev_usr_msg.usr_addr,
-        usr_cb_msg: prev_usr_msg.usr_cb_msg,
-    };
-
-    let cosmos_msg = fwd_rn_msg.to_cosmos_msg(
-        config.rng_interface_hash,
-        deps.api.human_address(&config.rng_interface_addr)?, 
-        None
-    )?;
-
+    let messages = try_create_rn_msg(deps, &env, entropy, cb_msg, usr_addr, &receiver_code_hash, &receiver_addr, purpose, max_blk_delay)?;
     Ok(HandleResponse {
-        messages: vec![cosmos_msg],
+        messages: messages,
         log: vec![],
         data: None
     })
-
-    // Ok(HandleResponse::default())
 }
 
-// cb_msg offset = 1 ==========================================================
-// Put this in init handle function if using this code 
-    // let cbm_store = CbMsg {
-    //     usr_hash: env.contract_code_hash,
-    //     usr_addr: deps.api.canonical_address(&env.contract.address)?,
-    //     usr_cb_msg: Binary(String::from("Here is an initial message String").as_bytes().to_vec()),
-    // }; 
-    // save_state(&mut deps.storage, CB_MSG_KEY, &cbm_store)?;
-// ============================================================================
-// pub fn try_h_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
-//     deps: &mut Extern<S, A, Q>,
-//     env: Env,
-//     entropy: T,
-//     cb_msg: Binary,
-//     callback_code_hash: String,
-//     contract_addr: String
-// ) -> StdResult<HandleResponse> {
-//     // need to transfer at least <fee amount> when requesting random number  
-//     if env.message.sent_funds.last().unwrap().amount
-//         < MIN_FEE
-//     || env.message.sent_funds.last().unwrap().denom != String::from("uscrt")
-// {
-//     return Err(StdError::generic_err(
-//         format!("Transferred amount:{}; coin:{}. Need to transfer {} uSCRT to generate random number.",
-//         env.message.sent_funds.last().unwrap().amount,
-//         env.message.sent_funds.last().unwrap().denom,
-//         MIN_FEE.u128()),
-//     ));
-// }
+/// Step 2 of "Option2". transmits RN
+pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    receiver_code_hash: String,
+    receiver_addr: String,
+    purpose: Option<String>,
+) -> StdResult<HandleResponse> {
+    // read from RN storage
+    let key = RnStorKy {
+        usr_addr: deps.api.canonical_address(&env.message.sender)?,
+        receiver_code_hash: receiver_code_hash.to_string(),
+        receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
+        purpose: purpose,
+    };
+    let usr_info_option = read_rn_store(&deps.storage, &key)?;
 
-//     // call generate RN function
-//     let rn_output = call_rn(deps, &env, entropy)?;
+    // Call function
+    let message = try_transmit_rn_msg(deps, &env, key, usr_info_option)?;
+    Ok(HandleResponse {
+        messages: message,
+        log: vec![],
+        data: None
+    })
+}
 
-//     // trigger callback for previous user
-//     //Load state
-//     let mut cbm_store: CbMsg = load_state(&deps.storage, CB_MSG_KEY)?;
-//     let prev_callback_code_hash = cbm_store.usr_hash;
-//     let prev_contract_addr = cbm_store.usr_addr;
-//     let prev_cb_msg = cbm_store.usr_cb_msg;
+/// "Option2" helper function. First transmits a previously created RN, then recreates a new RN 
+/// Variables that need to be the same: receiver_code_hash, receiver_addr, purpose
+/// Variables that can be different in new RN entry: cb_msg, max_blk_delay, user_addr (if None provided for any, uses previous entry)
+/// Need to input entropy
+pub fn try_transmit_recreate_rn<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    entropy: String,
+    cb_msg: Option<Binary>, // Option here
+    usr_addr: Option<String>,
+    receiver_code_hash: String, 
+    receiver_addr: String, 
+    purpose: Option<String>,
+    max_blk_delay: Option<u64>,
+) -> StdResult<HandleResponse> {
+    // read from RN storage
+    let key = RnStorKy {
+        usr_addr: deps.api.canonical_address(&env.message.sender)?,
+        receiver_code_hash: receiver_code_hash.to_string(),
+        receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
+        purpose: purpose,
+    };
+    let usr_info_option = read_rn_store(&deps.storage, &key)?;
+    let cb_msg_to_use = match cb_msg {
+        Some(_) => cb_msg.unwrap(),
+        // if =None, returns default value. Later, try_transmit_rn_msg() function will throw an error message
+        None => usr_info_option.clone().unwrap_or_else(|| RnStorVl::default()).usr_cb_msg,  
+    };
+    let purpose_clone = key.purpose.clone();
 
-//     //save cbm_store
-//     cbm_store.usr_hash = callback_code_hash;
-//     cbm_store.usr_addr = deps.api.canonical_address(&HumanAddr(contract_addr))?; 
-//     cbm_store.usr_cb_msg = cb_msg;
-//     save_state(& mut deps.storage, CB_MSG_KEY, &cbm_store)?;
+    let mut message0 = try_transmit_rn_msg(deps, &env, key, usr_info_option)?;
+    let mut messages = try_create_rn_msg(deps, &env, entropy, cb_msg_to_use, usr_addr, &receiver_code_hash, &receiver_addr, purpose_clone, max_blk_delay)?;
+    message0.append(&mut messages);
 
-//     // Send message back to consumer (to receive_rn)
-//     let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
-//         rn: rn_output,
-//         cb_msg: prev_cb_msg
-//     };
+    Ok(HandleResponse {
+        messages: messages,
+        log: vec![],
+        data: None
+    })
+}
 
-//     // let cosmos_msg_option = receive_rn_msg.to_cosmos_msg(
-//     //     prev_callback_code_hash.to_string(), 
-//     //     HumanAddr(prev_contract_addr.to_string()), 
-//     //     None
-//     // )?;
+/// Function for Step 1 of "Option2". Outputs the cosmos message variable, for another function to emit
+pub fn try_create_rn_msg<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: &Env,
+    entropy: String,
+    cb_msg: Binary,
+    usr_addr: Option<String>,
+    receiver_code_hash: &String, 
+    receiver_addr: &String, 
+    purpose: Option<String>,
+    max_blk_delay: Option<u64>,
+) -> StdResult<Vec<CosmosMsg>> {
+    // create RN
+    let rn_output = get_rn(deps, &env, &entropy)?;
+    
+    // store RN & related data
+    let usr_addr_result = match usr_addr {
+        Some(i) => deps.api.canonical_address(&HumanAddr(i))?,
+        None => deps.api.canonical_address(&env.message.sender)?,
+    };
+    let key = RnStorKy {
+        usr_addr: usr_addr_result,
+        receiver_code_hash: receiver_code_hash.to_string(),
+        receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
+        purpose: purpose,
+    };
+    let value = RnStorVl {
+        usr_rn: rn_output,
+        usr_cb_msg: cb_msg,
+        blk_height: env.block.height,
+        max_blk_delay: max_blk_delay.unwrap_or_else(|| 2^32), // if no input, default max delay set at 2^32 blocks (effectively no max)
+    };
+    write_rn_store(&mut deps.storage, &key, &value)?;
 
-//     let cosmos_msg_option = receive_rn_msg.to_cosmos_msg(
-//         prev_callback_code_hash.to_string(), 
-//         HumanAddr(prev_contract_addr.to_string()), 
-//         None
-//     );
 
-//     let cosmos_msg = match cosmos_msg_option {
-//         Ok(i) => i,
-//         Err(_) => return Err(StdError::generic_err("cosmos message for callback could not be created")),
-//     };
+    // // add to count
+    let idx = idx_read(&deps.storage).load()?;
+    idx_write(&mut deps.storage).save(&(&idx+1))?;
 
-//     Ok(HandleResponse {
-//         messages: vec![cosmos_msg],
-//         log: vec![],
-//         data: None
-//     })
+    //Potentially forward entropy to another contract
+    debug_print!("create_rn: forward entropy initiated");
+    let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
+    debug_print!("create_rn: forward entropy done");
+    let messages = cosmos_msg_fwd_entropy.unwrap_or_else(|| vec![]);
+    debug_print!("create_rn: messages unwrapped");
 
-//     // Ok(HandleResponse::default())
-// }
+    Ok(messages)
+}
 
+/// Function for Step 2 of "Option2" 
+pub fn try_transmit_rn_msg<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: &Env,
+    key: RnStorKy,
+    usr_info_option: Option<RnStorVl>,
+) -> StdResult<Vec<CosmosMsg>> {
+    // // read from RN storage
+    // let key = RnStorKy {
+    //     usr_addr: deps.api.canonical_address(&env.message.sender)?,
+    //     receiver_code_hash: receiver_code_hash.to_string(),
+    //     receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
+    //     purpose: purpose,
+    // };
+    // let usr_info_option = read_rn_store(&deps.storage, &key)?;
+
+    // check if entry exists
+    let usr_info = match usr_info_option {
+        None => return Err(StdError::generic_err(
+            "random number not found. Possible reasons (non-exhaustive): \n
+            i) Random number not yet created -> Create random number using create_rn first. \n
+            ii) Have been consumed -> random number can only be consumed once. Create new random number \n
+            iii) transmit_rn function can only be called by the user specified in the input during create_rn -> ensure correct user is calling transmit_rn \n
+            iv) random numbers are stored using using a key-value pair, where the key is (receiver_code_hash, receive_addr, purpose) -> ensure combination matches
+            what was input during create_rn  
+            "
+        )),
+        Some(i) => i
+    };
+
+    // block height check
+    let curr_height = env.block.height;
+    if curr_height <= usr_info.blk_height + 0 { // at least min block delay (of 1)
+        return Err(StdError::generic_err("please wait for a short time between creating rn and transmitting rn"));
+    } else if curr_height > usr_info.blk_height + usr_info.max_blk_delay { // does not exceed max delay set by user
+        return Err(StdError::generic_err("delay between create_rn and transmit_rn exceeds max delay specified by user"));
+    };
+
+
+    // remove entry
+    remove_rn_store(&mut deps.storage, &key)?;
+
+    // transmit msg: to receiver (to a receive_transmit_rn handle function)
+    let receive_rn_msg = ReceiveTrRnHandleMsg::ReceiveTrRn {
+        rn: usr_info.usr_rn,
+        cb_msg: usr_info.usr_cb_msg,
+        user: deps.api.canonical_address(&env.message.sender)?,
+        purpose: key.purpose,
+    };
+
+    let cosmos_msg = receive_rn_msg.to_cosmos_msg(
+        key.receiver_code_hash.to_string(), 
+        deps.api.human_address(&key.receiver_addr)?, 
+        None
+    )?;
+
+    Ok(vec![cosmos_msg])
+}
+
+/// Function that user's receiving contract need to have. Here for testing purposes only
 pub fn try_receive_rn<S: Storage, A: Api, Q: Querier>(  // RN consumer's handle message that continues the code
     _deps: &mut Extern<S, A, Q>,
     _env: Env,
@@ -706,7 +760,7 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     let response = match msg {
         QueryMsg::QueryRn {entropy} => try_query_rn(deps, entropy),
         QueryMsg::QueryAQuery {entropy, callback_code_hash, contract_addr} => try_query_a_query(deps, entropy, callback_code_hash, contract_addr),
-        QueryMsg::QueryDebug {which} => try_query_debug(deps, which), // <-- FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION
+        QueryMsg::QueryConfig {what} => try_query_config(deps, what), 
         _ => authenticated_queries(deps, msg),
    };
    pad_query_result(response, BLOCK_SIZE)
@@ -752,44 +806,34 @@ pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
     )?;
 
     to_binary(&QueryAnswer::RnOutput{rn: query_ans.rn_output.rn})
-    
 }
 
 
-pub fn try_query_debug<S: Storage, A: Api, Q: Querier>(
-    _deps: &Extern<S, A, Q>,
-    _which: u32
+pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    what: u32
 ) -> QueryResult {
-//FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-    // let seed: Seed = load_state(&deps.storage, SEED_KEY)?;
-    // let idx: u32 = idx_read(&deps.storage).load()?;
-    // let cbm_store: CbMsg = read_cb_msg(&deps.storage, &idx)?;
-    // let admins: Admins = load_state(&deps.storage, ADMIN_KEY)?;
-    // let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
-    // let config: ForwEntrpConfig = load_state(&deps.storage, CONFIG_KEY)?;
+    let seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
+    let idx: u32 = idx_read(&deps.storage).load()?;
+    let admins: Admins = load_state(&deps.storage, ADMIN_KEY)?;
+    let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
+    let config: ForwEntrpConfig = load_state(&deps.storage, FW_CONFIG_KEY)?;
 
-    // // Human Addr for admins
-    // let mut admin_human: Vec<HumanAddr> = vec![];
-    // for admin in admins.admins {
-    //     admin_human.push(deps.api.human_address(&admin)?)
-    // }
+    // Human Addr for admins
+    let mut admin_human: Vec<HumanAddr> = vec![];
+    for admin in admins.admins {
+        admin_human.push(deps.api.human_address(&admin)?)
+    }
 
-    // match which {
-    //     0 => return to_binary(&format!("seed: {:?}", seed.seed)),
-    //     1 => return to_binary(&format!("cb_msg user code hash: {:}", cbm_store.usr_hash)),
-    //     2 => return to_binary(&format!("cb_msg user addr: {:}", cbm_store.usr_addr)),
-    //     3 => return to_binary(&format!("cb_msg: {:?}", String::from_utf8(cbm_store.usr_cb_msg.as_slice().to_vec()))),
-    //     4 => return to_binary(&format!("cb_msg index: {:}", idx)),
-    //     5 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
-    //     6 => return to_binary(&format!("forward entropy hash: {:?}", config.forw_entropy_to_hash)),
-    //     7 => return to_binary(&format!("forward entropy addr: {:?}", config.forw_entropy_to_addr)),
-    //     8 => return to_binary(&format!("admin address: {:?}", admin_human)),
-    //     _ => return Err(StdError::generic_err("invalid number. Try 0-8"))
-    // };
-
-// /////////////////////////////////////////////////////////// 
-
-    to_binary(&QueryAnswer::RnOutput{rn: [0; 32]})
+    match what {
+        0 => return to_binary(&format!("seed: {:?}", seed.seed)),  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
+        1 => return to_binary(&format!("created rns via option 2: {:}", idx)),
+        2 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
+        3 => return to_binary(&format!("forward entropy hash: {:?}", config.forw_entropy_to_hash)),
+        4 => return to_binary(&format!("forward entropy addr: {:?}", config.forw_entropy_to_addr)),
+        5 => return to_binary(&format!("admin address: {:?}", admin_human)),
+        _ => return Err(StdError::generic_err("invalid number. Try 0-5"))
+    };
 }
 
 
@@ -861,15 +905,15 @@ mod tests {
 
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
-    use cosmwasm_std::{coins};  //StdError, from_binary
+    use cosmwasm_std::{coins, from_binary};
     // use serde::__private::de::IdentifierDeserializer;
 
     #[test]
-    fn call_rn_changes_rn() {
+    fn callback_rn_changes_rn() {
         let mut deps = mock_dependencies(20, &coins(2, "token"));
 
         let env = mock_env("creator", &coins(2, "token"));
-        let msg = InitMsg {initseed: String::from("initseed input String"), cb_offset: 1, prng_seed: String::from("seed string here")};
+        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed string here")};
         let _res = init(&mut deps, env, msg).unwrap();
 
         let seed1: Seed = match load_state(&mut deps.storage, SEED_KEY) {
@@ -901,7 +945,7 @@ mod tests {
         let mut deps = mock_dependencies(20, &coins(2, "token"));
 
         let env = mock_env("creator", &coins(2, "token"));
-        let msg = InitMsg {initseed: String::from("initseed input String"), cb_offset: 1, prng_seed: String::from("seed string here")};
+        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed string here")};
         let _res = init(&mut deps, env, msg).unwrap();
 
         let seed1: Seed = match load_state(&mut deps.storage, SEED_KEY) {
@@ -920,6 +964,48 @@ mod tests {
         assert_ne!(seed2.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
     }
 
+    #[test]
+    fn admin_access_works() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let env = mock_env("creator", &coins(2, "token"));
+        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed string here")};
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        let msg0 = QueryMsg::QueryConfig {what: 2};
+        let res0 = &query(&mut deps, msg0).unwrap();
+        let env = mock_env("creator", &coins(0, "token"));
+        let msg1 = HandleMsg::Configure {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
+        let res1 = &handle(&mut deps, env, msg1);
+        let msg2 = QueryMsg::QueryConfig {what: 2};
+        let res2 = &query(&mut deps, msg2).unwrap();
+
+        assert_eq!(from_binary::<String>(&res0).unwrap(), String::from("forward entropy?: false"));
+        assert_eq!(res1.is_ok(), true);
+        assert_eq!(from_binary::<String>(&res2).unwrap(), String::from("forward entropy?: true"));
+    }
+
+    #[test]
+    fn admin_access_denied() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let env = mock_env("creator", &coins(2, "token"));
+        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed string here")};
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        let msg0 = QueryMsg::QueryConfig {what: 2};
+        let res0 = &query(&mut deps, msg0).unwrap();
+        let env = mock_env("RN user", &coins(0, "token"));
+        let msg1 = HandleMsg::Configure {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
+        let res1 = &handle(&mut deps, env, msg1);
+        let msg2 = QueryMsg::QueryConfig {what: 2};
+        let res2 = &query(&mut deps, msg2).unwrap();
+
+        assert_eq!(from_binary::<String>(&res0).unwrap(), String::from("forward entropy?: false"));
+        // assert_eq!(res1.as_ref().err().unwrap(), &StdError::generic_err("This is an admin function"));
+        assert_eq!(res1.is_err(), true);
+        assert_eq!(res0, res2);
+    }
 
     // #[test]
     // fn call_rn_requires_min_fee() {

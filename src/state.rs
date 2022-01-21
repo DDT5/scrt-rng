@@ -3,6 +3,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use cosmwasm_std::{ReadonlyStorage, StdError, StdResult, Storage, CanonicalAddr, Binary};
 use std::any::type_name;
+use std::convert::TryInto;
 use secret_toolkit::serialization::{Bincode2, Serde};
 use secret_toolkit::storage::{TypedStore, TypedStoreMut};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage, ReadonlySingleton, Singleton, singleton, singleton_read};
@@ -11,10 +12,10 @@ use crate::{viewing_key::ViewingKey}; //, contract
 pub const SEED_KEY: &[u8] = b"seed";
 pub const PRNG_KEY: &[u8] = b"prng";
 pub const CB_MSG_KEY: &[u8] = b"cbmsg";
-pub static IDX_KEY: &[u8] = b"index";
+pub static IDX_KEY: &[u8] = b"index"; 
+pub const RN_STOR_KEY: &[u8] = b"rnstorage";
 pub const ENTRP_CHK_KEY: &[u8] = b"entropycheck";
-pub const CB_CONFIG_KEY: &[u8] = b"cbconfig";
-pub const CONFIG_KEY: &[u8] = b"config"; //forward entropy config
+pub const FW_CONFIG_KEY: &[u8] = b"config"; // forward entropy config 
 pub const ADMIN_KEY: &[u8] = b"admin";
 pub const PREFIX_VIEWING_KEY: &[u8] = b"viewingkey";
 
@@ -53,28 +54,50 @@ pub struct CbMsgConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]
-pub struct CbMsg {
-    pub usr_hash: String,
+pub struct RnStorKy {
     pub usr_addr: CanonicalAddr,
-    pub usr_cb_msg: Binary, 
+    pub receiver_code_hash: String,
+    pub receiver_addr: CanonicalAddr,
+    pub purpose: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]
+pub struct RnStorVl {
+    pub usr_rn: [u8; 32],
+    pub usr_cb_msg: Binary,
+    pub blk_height: u64,
+    pub max_blk_delay: u64,
+}
+
+// rn storage for "Option 2"
+pub fn write_rn_store<S: Storage>(store: &mut S, key: &RnStorKy, value: &RnStorVl) -> StdResult<()> {
+    let mut usr_rn_store = PrefixedStorage::new(RN_STOR_KEY, store);
+    let mut usr_rn_store = TypedStoreMut::attach(&mut usr_rn_store);
+    let key_vec = &Bincode2::serialize(key)?; 
+    let key_bin: &[u8] = key_vec.as_slice().try_into().expect("cannot convert storage key into binary"); 
+    usr_rn_store.store(key_bin, value)
+}
+
+pub fn read_rn_store<S: Storage>(store: &S, key: &RnStorKy) -> StdResult<Option<RnStorVl>> {
+    let usr_rn_store = ReadonlyPrefixedStorage::new(RN_STOR_KEY, store);
+    let usr_rn_store = TypedStore::attach(&usr_rn_store);
+    let key_vec = &Bincode2::serialize(key)?; 
+    let key_bin: &[u8] = key_vec.as_slice().try_into().expect("cannot convert storage key into binary"); 
+    let usr_msg = usr_rn_store.may_load(key_bin);
+    usr_msg
+    // usr_msg.map(Option::unwrap_or_default)
+}
+
+pub fn remove_rn_store<S: Storage>(store: &mut S, key: &RnStorKy) -> StdResult<()> {
+    let mut usr_rn_store = PrefixedStorage::new(RN_STOR_KEY, store);
+    let mut usr_rn_store: TypedStoreMut<RnStorVl, PrefixedStorage<S>> = TypedStoreMut::attach(&mut usr_rn_store);
+    let key_vec = &Bincode2::serialize(key)?; 
+    let key_bin: &[u8] = key_vec.as_slice().try_into().expect("cannot convert storage key into binary"); 
+    Ok(usr_rn_store.remove(key_bin))
 }
 
 
-//cb messages from users
-pub fn write_cb_msg<S: Storage>(store: &mut S, idx: &u32, value: &CbMsg) -> StdResult<()> {
-    let mut usr_cb_store = PrefixedStorage::new(CB_MSG_KEY, store);
-    let mut usr_cb_store = TypedStoreMut::attach(&mut usr_cb_store);
-    usr_cb_store.store(&idx.to_be_bytes(), value)
-}
-
-pub fn read_cb_msg<S: Storage>(store: &S, idx: &u32) -> StdResult<CbMsg> {
-    let usr_cb_store = ReadonlyPrefixedStorage::new(CB_MSG_KEY, store);
-    let usr_cb_store = TypedStore::attach(&usr_cb_store);
-    let usr_msg = usr_cb_store.may_load(&idx.to_be_bytes());
-    usr_msg.map(Option::unwrap_or_default)
-}
-
-// index (pointer) for cb_message read and write
+// index read and write
 pub fn idx_write<S: Storage>(storage: &mut S) -> Singleton<S, u32> {
     singleton(storage, IDX_KEY)
 }
