@@ -29,9 +29,9 @@ pub enum HandleMsg {
     CallbackRn {entropy: String, cb_msg: Binary, callback_code_hash: String, contract_addr: String},
 
     CreateRn {
-        entropy: String, cb_msg: Binary, usr_addr: Option<String>, receiver_code_hash: String, 
-        receiver_addr: String, purpose: Option<String>, max_blk_delay: Option<u64>,},
-    FulfillRn {receiver_code_hash: String, receiver_addr: String, purpose: Option<String>},
+        entropy: String, cb_msg: Binary, receiver_code_hash: String, 
+        receiver_addr: Option<String>, purpose: Option<String>, max_blk_delay: Option<u64>,},
+    FulfillRn {creator_addr: String, receiver_code_hash: String, purpose: Option<String>},
 
     ReceiveRn {rn: [u8; 32], cb_msg: Binary},
 

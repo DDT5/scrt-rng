@@ -55,7 +55,7 @@ pub struct CbMsgConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]
 pub struct RnStorKy {
-    pub usr_addr: CanonicalAddr,
+    pub creator_addr: CanonicalAddr,
     pub receiver_code_hash: String,
     pub receiver_addr: CanonicalAddr,
     pub purpose: Option<String>,

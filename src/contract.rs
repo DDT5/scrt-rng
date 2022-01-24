@@ -7,7 +7,7 @@ use cosmwasm_std::{
     to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, debug_print,
     StdError, StdResult, QueryResult, 
     Storage, BankMsg, Coin, CosmosMsg, Uint128,
-    HumanAddr, log, CanonicalAddr
+    HumanAddr, log, //CanonicalAddr
 };
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer}; //self
@@ -51,11 +51,11 @@ impl HandleCallback for ReceiveRnHandleMsg {
 // Calling receive_transmit_rn handle in receiver's contract ("Option 2")
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum ReceiveTrRnHandleMsg {
-    ReceiveTrRn {rn: [u8; 32], cb_msg: Binary, user: CanonicalAddr, purpose: Option<String>},
+pub enum ReceiveFRnHandleMsg {
+    ReceiveFRn {rn: [u8; 32], cb_msg: Binary, purpose: Option<String>},
 }
 
-impl HandleCallback for ReceiveTrRnHandleMsg {
+impl HandleCallback for ReceiveFRnHandleMsg {
     const BLOCK_SIZE: usize = BLOCK_SIZE;
 }
 
@@ -166,12 +166,12 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
         } => try_callback_rn(deps, env, entropy, cb_msg, callback_code_hash, contract_addr),
 
         HandleMsg::CreateRn {
-            entropy, cb_msg, usr_addr, receiver_code_hash, receiver_addr, purpose, max_blk_delay
-        } => try_create_rn(deps, env, entropy, cb_msg, usr_addr, receiver_code_hash, receiver_addr, purpose, max_blk_delay),
+            entropy, cb_msg, receiver_code_hash, receiver_addr, purpose, max_blk_delay
+        } => try_create_rn(deps, env, entropy, cb_msg, receiver_code_hash, receiver_addr, purpose, max_blk_delay),
 
         HandleMsg::FulfillRn {
-            receiver_code_hash, receiver_addr, purpose
-        } => try_fulfill_rn(deps, env, receiver_code_hash, receiver_addr, purpose),
+            creator_addr, receiver_code_hash, purpose
+        } => try_fulfill_rn(deps, env, creator_addr, receiver_code_hash, purpose),
 
         HandleMsg::ReceiveRn {
             rn, cb_msg
@@ -518,111 +518,24 @@ pub fn try_create_rn<S: Storage, A: Api, Q: Querier>(
     env: Env,
     entropy: String,
     cb_msg: Binary,
-    usr_addr: Option<String>,
     receiver_code_hash: String, 
-    receiver_addr: String, 
+    receiver_addr: Option<String>, 
     purpose: Option<String>,
     max_blk_delay: Option<u64>,
 ) -> StdResult<HandleResponse> {
-    let messages = try_create_rn_msg(deps, &env, entropy, cb_msg, usr_addr, &receiver_code_hash, &receiver_addr, purpose, max_blk_delay)?;
-    Ok(HandleResponse {
-        messages: messages,
-        log: vec![],
-        data: None
-    })
-}
-
-/// Step 2 of "Option2". transmits RN
-pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    receiver_code_hash: String,
-    receiver_addr: String,
-    purpose: Option<String>,
-) -> StdResult<HandleResponse> {
-    // read from RN storage
-    let key = RnStorKy {
-        usr_addr: deps.api.canonical_address(&env.message.sender)?,
-        receiver_code_hash: receiver_code_hash.to_string(),
-        receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
-        purpose: purpose,
-    };
-    let usr_info_option = read_rn_store(&deps.storage, &key)?;
-
-    // Call function
-    let message = try_transmit_rn_msg(deps, &env, key, usr_info_option)?;
-    Ok(HandleResponse {
-        messages: message,
-        log: vec![],
-        data: None
-    })
-}
-
-/// "Option2" helper function. First transmits a previously created RN, then recreates a new RN 
-/// Variables that need to be the same: receiver_code_hash, receiver_addr, purpose
-/// Variables that can be different in new RN entry: cb_msg, max_blk_delay, user_addr (if None provided for any, uses previous entry)
-/// Need to input entropy
-pub fn try_transmit_recreate_rn<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: Env,
-    entropy: String,
-    cb_msg: Option<Binary>, // Option here
-    usr_addr: Option<String>,
-    receiver_code_hash: String, 
-    receiver_addr: String, 
-    purpose: Option<String>,
-    max_blk_delay: Option<u64>,
-) -> StdResult<HandleResponse> {
-    // read from RN storage
-    let key = RnStorKy {
-        usr_addr: deps.api.canonical_address(&env.message.sender)?,
-        receiver_code_hash: receiver_code_hash.to_string(),
-        receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
-        purpose: purpose,
-    };
-    let usr_info_option = read_rn_store(&deps.storage, &key)?;
-    let cb_msg_to_use = match cb_msg {
-        Some(_) => cb_msg.unwrap(),
-        // if =None, returns default value. Later, try_transmit_rn_msg() function will throw an error message
-        None => usr_info_option.clone().unwrap_or_else(|| RnStorVl::default()).usr_cb_msg,  
-    };
-    let purpose_clone = key.purpose.clone();
-
-    let mut message0 = try_transmit_rn_msg(deps, &env, key, usr_info_option)?;
-    let mut messages = try_create_rn_msg(deps, &env, entropy, cb_msg_to_use, usr_addr, &receiver_code_hash, &receiver_addr, purpose_clone, max_blk_delay)?;
-    message0.append(&mut messages);
-
-    Ok(HandleResponse {
-        messages: messages,
-        log: vec![],
-        data: None
-    })
-}
-
-/// Function for Step 1 of "Option2". Outputs the cosmos message variable, for another function to emit
-pub fn try_create_rn_msg<S: Storage, A: Api, Q: Querier>(
-    deps: &mut Extern<S, A, Q>,
-    env: &Env,
-    entropy: String,
-    cb_msg: Binary,
-    usr_addr: Option<String>,
-    receiver_code_hash: &String, 
-    receiver_addr: &String, 
-    purpose: Option<String>,
-    max_blk_delay: Option<u64>,
-) -> StdResult<Vec<CosmosMsg>> {
     // create RN
     let rn_output = get_rn(deps, &env, &entropy)?;
     
     // store RN & related data
-    let usr_addr_result = match usr_addr {
+    let creator_addr = deps.api.canonical_address(&env.message.sender)?;
+    let receiver_addr_result = match receiver_addr {
         Some(i) => deps.api.canonical_address(&HumanAddr(i))?,
         None => deps.api.canonical_address(&env.message.sender)?,
     };
     let key = RnStorKy {
-        usr_addr: usr_addr_result,
+        creator_addr: creator_addr,
         receiver_code_hash: receiver_code_hash.to_string(),
-        receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
+        receiver_addr: receiver_addr_result,
         purpose: purpose,
     };
     let value = RnStorVl {
@@ -634,7 +547,7 @@ pub fn try_create_rn_msg<S: Storage, A: Api, Q: Querier>(
     write_rn_store(&mut deps.storage, &key, &value)?;
 
 
-    // // add to count
+    // add to count
     let idx = idx_read(&deps.storage).load()?;
     idx_write(&mut deps.storage).save(&(&idx+1))?;
 
@@ -645,24 +558,32 @@ pub fn try_create_rn_msg<S: Storage, A: Api, Q: Querier>(
     let messages = cosmos_msg_fwd_entropy.unwrap_or_else(|| vec![]);
     debug_print!("create_rn: messages unwrapped");
 
-    Ok(messages)
+    Ok(HandleResponse {
+        messages: messages,
+        log: vec![],
+        data: None
+    })
 }
 
-/// Function for Step 2 of "Option2" 
-pub fn try_transmit_rn_msg<S: Storage, A: Api, Q: Querier>(
+/// Step 2 of "Option2". transmits RN
+pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
-    env: &Env,
-    key: RnStorKy,
-    usr_info_option: Option<RnStorVl>,
-) -> StdResult<Vec<CosmosMsg>> {
-    // // read from RN storage
-    // let key = RnStorKy {
-    //     usr_addr: deps.api.canonical_address(&env.message.sender)?,
-    //     receiver_code_hash: receiver_code_hash.to_string(),
-    //     receiver_addr: deps.api.canonical_address(&HumanAddr(receiver_addr.to_string()))?,
-    //     purpose: purpose,
-    // };
-    // let usr_info_option = read_rn_store(&deps.storage, &key)?;
+    env: Env,
+    creator_addr: String,
+    receiver_code_hash: String,
+    purpose: Option<String>,
+) -> StdResult<HandleResponse> {
+    debug_print!("fulfill_rn: initiated");
+    // read from RN storage
+    let key = RnStorKy {
+        creator_addr: deps.api.canonical_address(&HumanAddr(creator_addr))?,
+        receiver_code_hash: receiver_code_hash.to_string(),
+        receiver_addr: deps.api.canonical_address(&env.message.sender)?, 
+        purpose: purpose,
+    };
+    debug_print!("fulfill_rn: receiver_addr is: {:?}", deps.api.human_address(&key.receiver_addr));
+    let usr_info_option = read_rn_store(&deps.storage, &key)?;
+    debug_print!("fulfill_rn: usr_info retrieved from storage");
 
     // check if entry exists
     let usr_info = match usr_info_option {
@@ -670,13 +591,15 @@ pub fn try_transmit_rn_msg<S: Storage, A: Api, Q: Querier>(
             "random number not found. Possible reasons (non-exhaustive): \n
             i) Random number not yet created -> Create random number using create_rn first. \n
             ii) Have been consumed -> random number can only be consumed once. Create new random number \n
-            iii) transmit_rn function can only be called by the user specified in the input during create_rn -> ensure correct user is calling transmit_rn \n
-            iv) random numbers are stored using using a key-value pair, where the key is (receiver_code_hash, receive_addr, purpose) -> ensure combination matches
-            what was input during create_rn  
+            iii) fulfill_rn function must be called by the address that called create_rn, or the receiver_addr if specified as an
+            input during create_rn -> ensure receiver is calling fulfill_rn \n
+            iv) random numbers are stored using using a key-value pair, where the key is (creator, receiver_code_hash, purpose) -> ensure 
+            combination matches what was input during create_rn  
             "
         )),
         Some(i) => i
     };
+    debug_print!("fulfill_rn: usr_info verified to exist");
 
     // block height check
     let curr_height = env.block.height;
@@ -685,27 +608,33 @@ pub fn try_transmit_rn_msg<S: Storage, A: Api, Q: Querier>(
     } else if curr_height > usr_info.blk_height + usr_info.max_blk_delay { // does not exceed max delay set by user
         return Err(StdError::generic_err("delay between create_rn and transmit_rn exceeds max delay specified by user"));
     };
-
+    debug_print!("fulfill_rn: block height check done");
 
     // remove entry
     remove_rn_store(&mut deps.storage, &key)?;
+    debug_print!("fulfill_rn: usr_info entry removed");
 
     // transmit msg: to receiver (to a receive_transmit_rn handle function)
-    let receive_rn_msg = ReceiveTrRnHandleMsg::ReceiveTrRn {
+    let receive_f_rn_msg = ReceiveFRnHandleMsg::ReceiveFRn {
         rn: usr_info.usr_rn,
         cb_msg: usr_info.usr_cb_msg,
-        user: deps.api.canonical_address(&env.message.sender)?,
         purpose: key.purpose,
     };
 
-    let cosmos_msg = receive_rn_msg.to_cosmos_msg(
+    let cosmos_msg = receive_f_rn_msg.to_cosmos_msg(
         key.receiver_code_hash.to_string(), 
         deps.api.human_address(&key.receiver_addr)?, 
         None
     )?;
+    debug_print!("fulfill_rn: cosmos_msg created");
 
-    Ok(vec![cosmos_msg])
+    Ok(HandleResponse {
+        messages: vec![cosmos_msg],
+        log: vec![],
+        data: None
+    })
 }
+
 
 /// Function that user's receiving contract need to have. Here for testing purposes only
 pub fn try_receive_rn<S: Storage, A: Api, Q: Querier>(  // RN consumer's handle message that continues the code
