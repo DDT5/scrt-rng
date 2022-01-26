@@ -834,7 +834,7 @@ mod tests {
 
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
-    use cosmwasm_std::{coins, from_binary};
+    use cosmwasm_std::{coins, from_binary}; //, BlockInfo, ContractInfo, MessageInfo, QueryResponse, WasmMsg
     // use serde::__private::de::IdentifierDeserializer;
 
     #[test]
@@ -867,6 +867,34 @@ mod tests {
         assert_eq!(seed1.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
         assert_ne!(seed2.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
         assert_ne!(res1, res2);
+    }
+
+    #[test]
+    fn create_rn_changes_rn() {
+        let mut deps = mock_dependencies(20, &coins(2, "token"));
+
+        let env = mock_env("creator", &coins(2, "token"));
+        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed string here")};
+        let _res = init(&mut deps, env, msg).unwrap();
+
+        let seed1: Seed = match load_state(&mut deps.storage, SEED_KEY) {
+            Ok(i) => i,
+            Err(_) => panic!("no seed loaded"),
+        };
+        let env1 = mock_env("RN user", &[]);
+        let msg1 = HandleMsg::CreateRn {
+            entropy: "foo bar".to_string(), cb_msg: Binary(String::from("cb_msg").as_bytes().to_vec()), receiver_code_hash: "hash".to_string(), 
+            receiver_addr: Some("receiver".to_string()), purpose: Some("roll dice".to_string()), max_blk_delay:Some(1)
+        };
+        let _res1 = &handle(&mut deps, env1, msg1).unwrap().data;
+
+        let seed2: Seed = match load_state(&mut deps.storage, SEED_KEY) {
+            Ok(i) => i,
+            Err(_) => panic!("no seed loaded"),
+        };
+
+        assert_eq!(seed1.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
+        assert_ne!(seed2.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
     }
 
     #[test]
