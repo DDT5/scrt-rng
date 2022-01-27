@@ -39,8 +39,6 @@ pub enum HandleMsg {
         entropy: String,
         padding: Option<String>,
     },
-
-    HandleAQuery {entropy: String, callback_code_hash: String, contract_addr: String},
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]  //, PartialEq

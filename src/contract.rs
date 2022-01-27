@@ -30,7 +30,7 @@ use sha2::{Digest};
 use std::convert::TryInto;
 
 pub const BLOCK_SIZE: usize = 256;
-pub const MIN_FEE: Uint128 = Uint128(100_000); /* 1mn uscrt = 1 SCRT */
+pub const MIN_FEE: Uint128 = Uint128(0); /* 1mn uscrt = 1 SCRT */
 
 /////////////////////////////////////////////////////////////////////////////////
 // Enums for callback
@@ -178,8 +178,6 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
         } => try_receive_rn(deps, env, rn, cb_msg),
 
         HandleMsg::GenerateViewingKey {entropy, .. } => try_generate_viewing_key(deps, env, entropy),
-
-        HandleMsg::HandleAQuery {entropy, callback_code_hash, contract_addr} => try_handle_a_query(deps, entropy, callback_code_hash, contract_addr),
     };
     pad_handle_result(response, BLOCK_SIZE)
 }
@@ -655,28 +653,7 @@ pub fn try_receive_rn<S: Storage, A: Api, Q: Querier>(  // RN consumer's handle 
     })
 }
 
-pub fn try_handle_a_query<S: Storage, A: Api, Q:Querier>(
-    deps: &Extern<S, A, Q>,
-    entropy: String,
-    callback_code_hash: String, 
-    contract_addr: String
-) -> StdResult<HandleResponse> {
-    let query_msg = QueryRnMsg::QueryRn {entropy: entropy};
-    let query_ans: QueryAnswerMsg = query_msg.query(   //: StdResult<Binary>   QueryAnswerMsg 
-        &deps.querier, 
-        callback_code_hash.to_string(), 
-        HumanAddr(contract_addr.to_string()),
-    )?;
 
-    let output_log = format!("{:?}", query_ans.rn_output.rn);
-
-    Ok(HandleResponse {
-        messages: vec![],
-        log: vec![log("output", output_log)],
-        data: None,
-    })
-    
-}
 
 /////////////////////////////////////////////////////////////////////////////////
 // Query functions 
@@ -688,7 +665,6 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
 ) -> QueryResult {  // StdResult<Binary> , QueryResult
     let response = match msg {
         QueryMsg::QueryRn {entropy} => try_query_rn(deps, entropy),
-        QueryMsg::QueryAQuery {entropy, callback_code_hash, contract_addr} => try_query_a_query(deps, entropy, callback_code_hash, contract_addr),
         QueryMsg::QueryConfig {what} => try_query_config(deps, what), 
         _ => authenticated_queries(deps, msg),
    };
@@ -721,28 +697,12 @@ pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
 
 }
 
-pub fn try_query_a_query<S: Storage, A: Api, Q:Querier>(
-    deps: &Extern<S, A, Q>,
-    entropy: String,
-    callback_code_hash: String, 
-    contract_addr: String
-) -> QueryResult {
-    let query_msg = QueryRnMsg::QueryRn {entropy: entropy};
-    let query_ans: QueryAnswerMsg = query_msg.query(   //: StdResult<Binary>   QueryAnswerMsg 
-        &deps.querier, 
-        callback_code_hash.to_string(), 
-        HumanAddr(contract_addr.to_string()),
-    )?;
-
-    to_binary(&QueryAnswer::RnOutput{rn: query_ans.rn_output.rn})
-}
-
 
 pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     what: u32
 ) -> QueryResult {
-    let seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
+    let _seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
     let idx: u32 = idx_read(&deps.storage).load()?;
     let admins: Admins = load_state(&deps.storage, ADMIN_KEY)?;
     let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
@@ -755,7 +715,7 @@ pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
     }
 
     match what {
-        0 => return to_binary(&format!("seed: {:?}", seed.seed)),  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
+        // 0 => return to_binary(&format!("seed: {:?}", seed.seed)),  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
         1 => return to_binary(&format!("created rns via option 2: {:}", idx)),
         2 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
         3 => return to_binary(&format!("forward entropy hash: {:?}", config.forw_entropy_to_hash)),
