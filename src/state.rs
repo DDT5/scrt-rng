@@ -7,11 +7,10 @@ use std::convert::TryInto;
 use secret_toolkit::serialization::{Bincode2, Serde};
 use secret_toolkit::storage::{TypedStore, TypedStoreMut};
 use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage, ReadonlySingleton, Singleton, singleton, singleton_read};
-use crate::{viewing_key::ViewingKey}; //, contract
+use crate::{viewing_key::ViewingKey}; 
 
 pub const SEED_KEY: &[u8] = b"seed";
 pub const PRNG_KEY: &[u8] = b"prng";
-pub const CB_MSG_KEY: &[u8] = b"cbmsg";
 pub static IDX_KEY: &[u8] = b"index"; 
 pub const RN_STOR_KEY: &[u8] = b"rnstorage";
 pub const ENTRP_CHK_KEY: &[u8] = b"entropycheck";
@@ -21,40 +20,38 @@ pub const PREFIX_VIEWING_KEY: &[u8] = b"viewingkey";
 pub const PERMITTED_VK: &[u8] = b"permittedvk"; // other contracts within the protocol (eg: scrt-rng2) can generate viewing keys
 pub const VK_LOG: &[u8] = b"vklog"; // for transparency so anyone can see who has generated VK before (should only be other scrt-rng contracts)
 
+/// RNG seed
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Seed {
     pub seed: [u8; 32],
 }
 
+/// viewing key seed
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PrngSeed {
-    pub prng_seed: Vec<u8>,  // viewing key seed
+    pub prng_seed: Vec<u8>,  
 }
 
+/// switch to determine if entropy is forwarded or not
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct EntrpChk {
-    // switch to determine if entropy is forwarded or not
     pub forw_entropy_check: bool,
 }
 
+/// config on which addresses to forward entropy to
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ForwEntrpConfig {
     pub forw_entropy_to_hash: Vec<String>,
     pub forw_entropy_to_addr: Vec<String>,
 }
 
+/// struct to hold addresses, used by several config settings
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct AuthAddrs {
     pub addrs: Vec<CanonicalAddr>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]
-pub struct CbMsgConfig {
-    pub rng_interface_hash: String,
-    pub rng_interface_addr: CanonicalAddr,
-    pub cb_offset: u32,
-}
-
+/// the key in the key-value pair for Option2
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]
 pub struct RnStorKy {
     pub creator_addr: CanonicalAddr,
@@ -63,6 +60,7 @@ pub struct RnStorKy {
     pub purpose: Option<String>,
 }
 
+/// the value in the key-value pair for Option2
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]
 pub struct RnStorVl {
     pub usr_rn: [u8; 32],
@@ -98,7 +96,6 @@ pub fn remove_rn_store<S: Storage>(store: &mut S, key: &RnStorKy) -> StdResult<(
     Ok(usr_rn_store.remove(key_bin))
 }
 
-
 // index read and write
 pub fn idx_write<S: Storage>(storage: &mut S) -> Singleton<S, u32> {
     singleton(storage, IDX_KEY)
@@ -107,7 +104,6 @@ pub fn idx_write<S: Storage>(storage: &mut S) -> Singleton<S, u32> {
 pub fn idx_read<S: Storage>(storage: &S) -> ReadonlySingleton<S, u32> {
     singleton_read(storage, IDX_KEY)
 }
-
 
 // Viewing key for authenticated queries
 pub fn write_viewing_key<S: Storage>(store: &mut S, owner: &CanonicalAddr, key: &ViewingKey) {

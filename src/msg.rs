@@ -13,7 +13,7 @@ pub struct InitMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleMsg {
-    ConfigureFwd {   // for admin to configure forward entropy parameters
+    ConfigureFwd { 
         forw_entropy: bool,
         forw_entropy_to_hash: Vec<String>,
         forw_entropy_to_addr: Vec<String>,
@@ -23,7 +23,6 @@ pub enum HandleMsg {
     RemoveAdmin {remove: String},
 
     DonateEntropy {entropy: String},
-    DonateEntropyRwrd {entropy: String},
 
     RequestRn {entropy: String},
 
@@ -42,13 +41,11 @@ pub enum HandleMsg {
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]  //, PartialEq
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]  
 #[serde(rename_all = "snake_case")]
 pub enum HandleAnswer {
     Rn {
         rn: [u8; 32],
-        // blocktime: u64
-        // cb_msg: Binary,
     },
     GenerateViewingKey {
         key: ViewingKey,

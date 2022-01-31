@@ -164,13 +164,12 @@ function quiet_wait_for_compute_tx() {
 
 # upload all three contracts at once 
 secretcli tx compute store rng.wasm.gz --from a --gas 4000000 -y;
-secretcli tx compute store interface.wasm.gz --from b --gas 4000000 -y; 
-secretcli tx compute store user.wasm.gz --from c --gas 4000000 -y; 
-txh="$(tx_of secretcli tx compute store rng.wasm.gz --from d --gas 4000000 -y)";
+secretcli tx compute store user.wasm.gz --from b --gas 4000000 -y; 
+txh="$(tx_of secretcli tx compute store user.wasm.gz --from c --gas 4000000 -y)";
 wait_for_tx $txh "waiting";
 # upload another (third) scrt-rng and a second user
 txh="$(tx_of secretcli tx compute store rng.wasm.gz --from a --gas 4000000 -y)";
-txh="$(tx_of secretcli tx compute store user.wasm.gz --from b --gas 4000000 -y)";
+txh="$(tx_of secretcli tx compute store rng.wasm.gz --from b --gas 4000000 -y)";
 wait_for_tx $txh "waiting";
 
 # secretcli query compute list-code
@@ -185,46 +184,37 @@ wait_for_compute_tx $txh "waiting";
 AA="$(secretcli keys show --address a)";  
 BB="$(secretcli keys show --address b)";  
 CC="$(secretcli keys show --address c)";  
-CONTRACT="$(secretcli query compute list-contract-by-code 1 | jq -er '.[].address')";
+CONTRACT="$(secretcli query compute list-contract-by-code $CODE_ID | jq -er '.[].address')";
 HASH="$(secretcli q compute contract-hash $CONTRACT | sed 's/^0x//')";
 
-# instantiate scrt-rng-interface 
-INIT_CB_MSG="$(base64 <<<'init cb message')"; 
-INIT='{"rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'","init_cb_msg":"'"$INIT_CB_MSG"'","cb_offset":1}' 
-CODE_ID=2 ; \
-txh="$(tx_of secretcli tx compute instantiate $CODE_ID "$INIT" --from a --label "rng INTERFACE!" -y)"
-wait_for_compute_tx $txh "waiting";
-
-INTERF="$(secretcli query compute list-contract-by-code 2 | jq -er '.[].address')";
-INTERF_H="$(secretcli q compute contract-hash $INTERF | sed 's/^0x//')";
 
 # instantiate rn-user(s)
-INIT='{"rng_addr":"'"$CONTRACT"'","rng_interf_addr":"'"$INTERF"'"}' 
-CODE_ID=3 ; \
-txh="$(tx_of secretcli tx compute instantiate $CODE_ID "$INIT" --from a --label "rn USER!" -y)"
+INIT='{"rng_addr":"'"$CONTRACT"'"}' 
+CODE_IDa=2;
+txh="$(tx_of secretcli tx compute instantiate $CODE_IDa "$INIT" --from a --label "rn USER!" -y)"
 
-CODE_ID=6 ;
-txh="$(tx_of secretcli tx compute instantiate $CODE_ID "$INIT" --from b --label "rn USER 2!" -y)"
+CODE_IDb=3 ;
+txh="$(tx_of secretcli tx compute instantiate $CODE_IDb "$INIT" --from b --label "rn USER 2!" -y)"
 wait_for_compute_tx $txh "waiting";
 
-USER="$(secretcli query compute list-contract-by-code 3 | jq -er '.[].address')";
+USER="$(secretcli query compute list-contract-by-code $CODE_IDa | jq -er '.[].address')";
 USER_H="$(secretcli q compute contract-hash $USER | sed 's/^0x//')";
 
-USER2="$(secretcli query compute list-contract-by-code $CODE_ID | jq -er '.[].address')";
+USER2="$(secretcli query compute list-contract-by-code $CODE_IDb | jq -er '.[].address')";
 USER2_H="$(secretcli q compute contract-hash $USER2 | sed 's/^0x//')";
 
 # instantiate second and third rn-user 
 INIT='{"initseed": "initseed input String", "prng_seed":"seed string here"}'
-CODE_ID=4 ;
-txh="$(tx_of secretcli tx compute instantiate $CODE_ID "$INIT" --from a --label "my SECOND oracle!" -y)"
+CODE_IDa=4 ;
+txh="$(tx_of secretcli tx compute instantiate $CODE_IDa "$INIT" --from a --label "my SECOND oracle!" -y)"
 
-CODE_ID=5 ;
-txh="$(tx_of secretcli tx compute instantiate $CODE_ID "$INIT" --from b --label "my THIRD oracle!" -y)"
+CODE_IDb=5 ;
+txh="$(tx_of secretcli tx compute instantiate $CODE_IDb "$INIT" --from b --label "my THIRD oracle!" -y)"
 wait_for_compute_tx $txh "waiting";
 
-CONTRACT2="$(secretcli query compute list-contract-by-code 4 | jq -er '.[].address')";
+CONTRACT2="$(secretcli query compute list-contract-by-code $CODE_IDa | jq -er '.[].address')";
 HASH2="$(secretcli q compute contract-hash $CONTRACT2 | sed 's/^0x//')";
-CONTRACT3="$(secretcli query compute list-contract-by-code 5 | jq -er '.[].address')";
+CONTRACT3="$(secretcli query compute list-contract-by-code $CODE_IDb | jq -er '.[].address')";
 HASH3="$(secretcli q compute contract-hash $CONTRACT3 | sed 's/^0x//')";
 
 # ########################################################################
@@ -235,25 +225,17 @@ HASH3="$(secretcli q compute contract-hash $CONTRACT3 | sed 's/^0x//')";
 # Option 1 functions
 # ------------------------------------------------------------------------
 function test_op1() {
+    # gas log for callback_rn called via cli
     callbackbinary="$(base64 <<<'message before RN')"
-
-    # two consecutive callback_rn results in different RN (ie: changes seed)
-    txh0="$(tx_of secretcli tx compute execute $CONTRACT '{"callback_rn": {"entropy":"foo bar","cb_msg":"'"$callbackbinary"'", "callback_code_hash":"'"$HASH"'", "contract_addr":"'"$CONTRACT"'"}}' --amount "100000uscrt" --gas 250000 --from a -y)";
-    txh1="$(tx_of secretcli tx compute execute $CONTRACT '{"callback_rn": {"entropy":"foo bar","cb_msg":"'"$callbackbinary"'", "callback_code_hash":"'"$HASH"'", "contract_addr":"'"$CONTRACT"'"}}' --amount "100000uscrt" --gas 250000 --from b -y)";
-    wait_for_compute_tx $txh1 "waiting for tx"
-    RN0="$(secretcli q compute tx $txh0 | jq '.output_log[].attributes[1].value')"
-    RN1="$(secretcli q compute tx $txh1 | jq '.output_log[].attributes[1].value')"
-    echo "testing: consecutive callback_rn has different RN: $RN0 vs $RN1"
-    assert_ne $RN0 $RN1
-    echo "testing: RN non-empty"
-    assert_ne $RN0 ""; assert_ne $RN1 ""
+    txh0="$(tx_of secretcli tx compute execute $CONTRACT '{"callback_rn": {"entropy":"foo bar","cb_msg":"'"$callbackbinary"'", "callback_code_hash":"'"$HASH"'", "contract_addr":"'"$CONTRACT"'"}}' --gas 300000 --from a -y)";
+    wait_for_compute_tx $txh0 "waiting for tx"
     log_gas $txh0 "callback_rn-through-cli"
 
-    # User contract can callback_rn and receive cb_msg, and RN (seed) changes
+    # User contract can callback_rn and receive cb_msg, and RN (seed) changes from the two consecutive callback_rn calls
     callbackmsg='message before RN from user'
     callbackbinary="$(base64 <<< $callbackmsg)" 
-    txh0="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --amount "200000uscrt" --from a --gas 300000 -y)"
-    txh1="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --amount "200000uscrt" --from b --gas 300000 -y)"
+    txh0="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
+    txh1="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
     wait_for_compute_tx $txh1 "waiting for tx"
     echo "testing: cb_msg should be: $callbackmsg"
     assert_eq "$(secretcli q compute tx $txh0 | jq -r '.output_log[].attributes[] | select(.key=="cb_msg") | .value')" "$callbackmsg"
@@ -402,6 +384,9 @@ function test_op2() {
 # ------------------------------------------------------------------------
 
 # Non-admin cannot access config function...
+# txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":true,"forw_entropy_to_hash":["'"$HASH2"'","'"$HASH3"'"],"forw_entropy_to_addr":["'"$CONTRACT2"'","'"$CONTRACT3"'"]}}' --from a -y)"
+# wait_for_compute_tx $txh "waiting for tx";
+# assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error | keys[]')" "generic_err"
 
 # ...or change_admin function
 
