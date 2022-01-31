@@ -23,8 +23,11 @@ Scrt-RNG has two generators that share the same entropy pool: a one-transaction 
 Coming soon!
 
 ## More information
-https://medium.com/@DDT5/introducing-secret-oracle-rng-a4d15e06dcf6
-https://medium.com/@DDT5/secret-oracle-rng-under-the-hood-e14a505ded0a
+[scrt.network blog post](https://scrt.network/blog/secret-feature-secret-oracles)
+
+[Medium article: introducing Scrt-RNG](https://medium.com/@DDT5/introducing-secret-oracle-rng-a4d15e06dcf6)
+
+[Medium article: under the hood](https://medium.com/@DDT5/secret-oracle-rng-under-the-hood-e14a505ded0a)
 
 ## Licence
 Apache License Version 2.0, January 2004

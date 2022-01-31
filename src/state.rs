@@ -18,6 +18,8 @@ pub const ENTRP_CHK_KEY: &[u8] = b"entropycheck";
 pub const FW_CONFIG_KEY: &[u8] = b"config"; // forward entropy config 
 pub const ADMIN_KEY: &[u8] = b"admin";
 pub const PREFIX_VIEWING_KEY: &[u8] = b"viewingkey";
+pub const PERMITTED_VK: &[u8] = b"permittedvk"; // other contracts within the protocol (eg: scrt-rng2) can generate viewing keys
+pub const VK_LOG: &[u8] = b"vklog"; // for transparency so anyone can see who has generated VK before (should only be other scrt-rng contracts)
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Seed {
@@ -42,8 +44,8 @@ pub struct ForwEntrpConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct Admins {
-    pub admins: Vec<CanonicalAddr>,
+pub struct AuthAddrs {
+    pub addrs: Vec<CanonicalAddr>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Default)]

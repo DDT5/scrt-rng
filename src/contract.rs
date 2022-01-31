@@ -7,14 +7,14 @@ use cosmwasm_std::{
     to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, debug_print,
     StdError, StdResult, QueryResult, 
     Storage, BankMsg, Coin, CosmosMsg, Uint128,
-    HumanAddr, log, //CanonicalAddr
+    HumanAddr, log, CanonicalAddr, //CanonicalAddr
 };
 
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer}; //self
 use crate::state::{
-    Seed, EntrpChk, Admins, ForwEntrpConfig, PrngSeed, RnStorKy, RnStorVl,
+    Seed, EntrpChk, AuthAddrs, ForwEntrpConfig, PrngSeed, RnStorKy, RnStorVl,
     load_state, save_state, write_viewing_key, read_viewing_key, idx_read, idx_write, write_rn_store, read_rn_store, remove_rn_store,
-    SEED_KEY, FW_CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY,
+    SEED_KEY, FW_CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, PERMITTED_VK, VK_LOG,
 };  
 use crate::viewing_key::{ViewingKey}; //self, 
 use crate::viewing_key::VIEWING_KEY_SIZE;
@@ -111,8 +111,8 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     save_state(&mut deps.storage, SEED_KEY, &seed)?;
 
     // init other variables ------------------------------------------------------
-    let admin = Admins {
-        admins: vec![deps.api.canonical_address(&env.message.sender)?],
+    let admin = AuthAddrs {
+        addrs: vec![deps.api.canonical_address(&env.message.sender)?],
     };
     save_state(&mut deps.storage, ADMIN_KEY, &admin)?;
 
@@ -132,6 +132,11 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     };
     save_state(&mut deps.storage, PRNG_KEY, &pseed)?;
 
+    // initialize PERMITTED_VK and VK_LOG to vec![]
+    let empty_vec: Vec<HumanAddr> = vec![];
+    save_state(&mut deps.storage, PERMITTED_VK, &empty_vec)?;
+    save_state(&mut deps.storage, VK_LOG, &empty_vec)?;
+
     // initialize cb_msg index (pointer) to 0
     idx_write(&mut deps.storage).save(&0u32)?;
 
@@ -149,10 +154,10 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     msg: HandleMsg,
 ) -> StdResult <HandleResponse> {
     let response = match msg {
-        HandleMsg::Configure {
+        HandleMsg::ConfigureFwd {
             forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr,
-        } => try_configure(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr),
-
+        } => try_configure_fwd(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr),
+        HandleMsg::ConfigureAuth {add} => try_configure_auth(deps, env, add),
         HandleMsg::AddAdmin {add} => try_add_admin(deps, env, add),
         HandleMsg::RemoveAdmin {remove} => try_remove_admin(deps, env, remove),
 
@@ -182,7 +187,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
     pad_handle_result(response, BLOCK_SIZE)
 }
 
-fn try_configure<S: Storage, A: Api, Q: Querier>(
+fn try_configure_fwd<S: Storage, A: Api, Q: Querier>(
     deps: &mut Extern<S, A, Q>,
     env: Env,
     forw_entropy: bool,
@@ -190,14 +195,8 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
     forw_entropy_to_addr: Vec<String>,
 ) -> StdResult<HandleResponse> {
     // check if admin
-    let admins_vec: Admins = load_state(&mut deps.storage, ADMIN_KEY)?;
-    let admins = &admins_vec.admins;
-    let sender = &deps.api.canonical_address(&env.message.sender)?;
-    if !admins.contains(&sender) {
-        return Err(StdError::generic_err(
-            "This is an admin function",
-        ));
-    }
+    let admins_vec: AuthAddrs = load_state(&mut deps.storage, ADMIN_KEY)?;
+    check_auth(deps, &env, &admins_vec)?;
 
     // change Forward Entropy Config
     let new_entrp_chk = EntrpChk {
@@ -209,6 +208,26 @@ fn try_configure<S: Storage, A: Api, Q: Querier>(
     };
     save_state(&mut deps.storage, ENTRP_CHK_KEY, &new_entrp_chk)?;
     save_state(&mut deps.storage, FW_CONFIG_KEY, &new_config)?;
+    
+    Ok(HandleResponse::default())
+}
+
+/// Add authenticated address to access query_rn (other scrt-rng contracts)
+/// for transparency/security, addresses can only be added (and not removed)
+/// so anyone can query_config to see all addrs that had been able to generate VK
+fn try_configure_auth<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    add: String,
+) -> StdResult<HandleResponse> {
+    // check if admin
+    let admins_vec: AuthAddrs = load_state(&mut deps.storage, ADMIN_KEY)?;
+    check_auth(deps, &env, &admins_vec)?;
+
+    // add auth
+    let mut auth_vec: AuthAddrs = load_state(&mut deps.storage, PERMITTED_VK)?;    
+    auth_vec.addrs.extend(deps.api.canonical_address(&HumanAddr(add)));
+    save_state(&mut deps.storage, PERMITTED_VK, &auth_vec.addrs)?;
 
     Ok(HandleResponse::default())
 }
@@ -219,12 +238,12 @@ fn try_add_admin<S: Storage, A: Api, Q: Querier>(
     add: String,
 ) -> StdResult<HandleResponse> {
     // check if admin
-    let mut admins_vec: Admins = load_state(&mut deps.storage, ADMIN_KEY)?;
-    check_admin(deps, &env, &admins_vec)?;
+    let mut admins_vec: AuthAddrs = load_state(&mut deps.storage, ADMIN_KEY)?;
+    check_auth(deps, &env, &admins_vec)?;
     
     // add admin
-    admins_vec.admins.extend(deps.api.canonical_address(&HumanAddr(add)));
-    save_state(&mut deps.storage, ADMIN_KEY, &admins_vec.admins)?;
+    admins_vec.addrs.extend(deps.api.canonical_address(&HumanAddr(add)));
+    save_state(&mut deps.storage, ADMIN_KEY, &admins_vec.addrs)?;
 
     Ok(HandleResponse::default())
 }
@@ -235,38 +254,63 @@ fn try_remove_admin<S: Storage, A: Api, Q: Querier>(
     remove: String,
 ) -> StdResult<HandleResponse> {
     // check if admin
-    let mut admins_vec: Admins = load_state(&mut deps.storage, ADMIN_KEY)?;
-    check_admin(deps, &env, &admins_vec)?;
+    let mut admins_vec: AuthAddrs = load_state(&mut deps.storage, ADMIN_KEY)?;
+    check_auth(deps, &env, &admins_vec)?;
 
     // cannot remove creator
     let remove_canon = deps.api.canonical_address(&HumanAddr(remove))?;
-    if remove_canon == admins_vec.admins[0] {
+    if remove_canon == admins_vec.addrs[0] {
         return Err(StdError::generic_err(
             "Cannot remove creator as admin"
         ));
     }
 
     // remove admin
-    admins_vec.admins.retain(|x| x != &remove_canon);
-    save_state(&mut deps.storage, ADMIN_KEY, &admins_vec.admins)?;
+    admins_vec.addrs.retain(|x| x != &remove_canon);
+    save_state(&mut deps.storage, ADMIN_KEY, &admins_vec.addrs)?;
 
     Ok(HandleResponse::default())
 }
 
-fn check_admin<S: Storage, A: Api, Q:Querier>(
+fn check_auth<S: Storage, A: Api, Q:Querier>(
     deps: &mut Extern<S, A, Q>,
     env: &Env,
-    admins_vec: &Admins, 
+    addr_vec: &AuthAddrs, 
 ) -> StdResult<()> {
-    let admins = &admins_vec.admins;
+    let addrs = &addr_vec.addrs;
     let sender = &deps.api.canonical_address(&env.message.sender)?;
-    if !admins.contains(&sender) {
+    if !addrs.contains(&sender) {
         return Err(StdError::generic_err(
-            "This is an admin function",
+            "This is an authenticated function",
         ));
     }
     Ok(())
 }
+
+fn change_seed<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+    deps: &mut Extern<S, A, Q>,
+    env: &Env,
+    entropy: T,
+) -> StdResult<[u8; 32]> {
+    debug_print!("change_seed: initiated");
+    //Load state (seed)
+    let mut seed: Seed = load_state(&deps.storage, SEED_KEY)?;
+    debug_print!("change_seed: old seed loaded");
+
+    //Converts new entropy and old seed into a new seed
+    let new_string: String = format!("{:?}+{:?}+{:?}", entropy, seed.seed, &env.block.time);
+    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("failed to create new seed");
+    debug_print!("change_seed: new seed created");
+
+    //Save Seed
+    seed.seed = new_seed;
+    save_state(&mut deps.storage, SEED_KEY, &seed)?;
+    debug_print!("change_seed: new seed saved");
+
+    Ok(new_seed)
+}
+
 
 fn get_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     deps: &mut Extern<S, A, Q>,
@@ -275,17 +319,7 @@ fn get_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
 ) -> StdResult<[u8; 32]> { 
     debug_print!("get_rn: initiated");
 
-    //Load state (seed)
-    let mut seed: Seed = load_state(&deps.storage, SEED_KEY)?;
-
-    //Converts new entropy and old seed into a new seed
-    let new_string: String = format!("{:?}+{:?}+{:?}", entropy, seed.seed, &env.block.time);
-    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
-    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
-
-    //Save Seed
-    seed.seed = new_seed;
-    save_state(&mut deps.storage, SEED_KEY, &seed)?;
+    let new_seed = change_seed(deps, env, entropy)?;
 
     //Generate random number -- chacha
     let mut rng = ChaChaRng::from_seed(new_seed);
@@ -344,6 +378,11 @@ pub fn try_generate_viewing_key<S: Storage, A: Api, Q: Querier> (
     env: Env,
     entropy: String
 ) -> StdResult<HandleResponse> {
+    // Only other scrt-rng protocol contracts can generate VK
+    let auth_vec: AuthAddrs = load_state(&mut deps.storage, PERMITTED_VK)?;
+    check_auth(deps, &env, &auth_vec)?;
+
+    // Generated VK
     let config: PrngSeed = load_state(&mut deps.storage, PRNG_KEY)?;   // changed this from CONFIG_KEY
     let prng_seed = config.prng_seed;
 
@@ -352,6 +391,11 @@ pub fn try_generate_viewing_key<S: Storage, A: Api, Q: Querier> (
     let message_sender = deps.api.canonical_address(&env.message.sender)?;
 
     write_viewing_key(&mut deps.storage, &message_sender, &key);
+
+    // log addr that generated VK -- should only be other scrt-rng protocol contracts
+    let mut vklog_vec: AuthAddrs = load_state(&mut deps.storage, VK_LOG)?;    
+    vklog_vec.addrs.extend(deps.api.canonical_address(&env.message.sender));
+    save_state(&mut deps.storage, VK_LOG, &vklog_vec.addrs)?;
 
     Ok(HandleResponse {
         messages: vec![],
@@ -572,6 +616,11 @@ pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
     purpose: Option<String>,
 ) -> StdResult<HandleResponse> {
     debug_print!("fulfill_rn: initiated");
+    // change seed
+    let entropy = format!("{:?} {:?}", &env.message, &purpose); 
+    let _new_seed = change_seed(deps, &env, entropy)?;
+    debug_print!("fulfill_rn: seed changed");
+
     // read from RN storage
     let key = RnStorKy {
         creator_addr: deps.api.canonical_address(&HumanAddr(creator_addr))?,
@@ -664,67 +713,81 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     msg: QueryMsg,
 ) -> QueryResult {  // StdResult<Binary> , QueryResult
     let response = match msg {
-        QueryMsg::QueryRn {entropy} => try_query_rn(deps, entropy),
+        // QueryMsg::QueryRn {entropy} => try_query_rn(deps, entropy),
         QueryMsg::QueryConfig {what} => try_query_config(deps, what), 
         _ => authenticated_queries(deps, msg),
    };
    pad_query_result(response, BLOCK_SIZE)
 }
 
-pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
-    deps: &Extern<S, A, Q>,
-    entropy: T,
-) -> QueryResult {
-    // Load seed
-    let seed: Seed = load_state(&deps.storage, SEED_KEY)?; // remove `mut`
+// pub fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+//     deps: &Extern<S, A, Q>,
+//     entropy: T,
+// ) -> QueryResult {
+//     // Load seed
+//     let seed: Seed = load_state(&deps.storage, SEED_KEY)?; // remove `mut`
 
-    // Converts new entropy and old seed into a new seed
-    let new_string: String = format!("{:?}+{:?}", seed.seed, entropy);
-    let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
-    let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
+//     // Converts new entropy and old seed into a new seed
+//     let new_string: String = format!("{:?}+{:?}", seed.seed, entropy);
+//     let new_seed_arr = sha2::Sha256::digest(new_string.as_bytes());
+//     let new_seed: [u8; 32] = new_seed_arr.as_slice().try_into().expect("Wrong length");
     
-    //Generate random number -- chacha
-    let mut rng = ChaChaRng::from_seed(new_seed);
+//     //Generate random number -- chacha
+//     let mut rng = ChaChaRng::from_seed(new_seed);
 
-    let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
-    for i in 0..dest.len() {
-        dest[i] = rng.gen();
-    }
+//     let mut dest: Vec<u8> = vec![0; 32];  // bytes as usize];
+//     for i in 0..dest.len() {
+//         dest[i] = rng.gen();
+//     }
 
-    let rn_output: [u8; 32] = dest.try_into().expect("cannot");
+//     let rn_output: [u8; 32] = dest.try_into().expect("cannot");
 
-    to_binary(&QueryAnswer::RnOutput{rn: rn_output})
+//     to_binary(&QueryAnswer::RnOutput{rn: rn_output})
 
-}
+// }
 
 
 pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
     what: u32
 ) -> QueryResult {
-    let _seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
+    let seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
     let idx: u32 = idx_read(&deps.storage).load()?;
-    let admins: Admins = load_state(&deps.storage, ADMIN_KEY)?;
+    let admins: AuthAddrs = load_state(&deps.storage, ADMIN_KEY)?;
     let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
-    let config: ForwEntrpConfig = load_state(&deps.storage, FW_CONFIG_KEY)?;
+    let configfw: ForwEntrpConfig = load_state(&deps.storage, FW_CONFIG_KEY)?;
+    let permittedvk: AuthAddrs = load_state(&deps.storage, PERMITTED_VK)?;
+    let vklog: AuthAddrs = load_state(&deps.storage, VK_LOG)?;
 
-    // Human Addr for admins
-    let mut admin_human: Vec<HumanAddr> = vec![];
-    for admin in admins.admins {
-        admin_human.push(deps.api.human_address(&admin)?)
-    }
+    // Human Addrs
+    let admin_human = humanize_vec(deps, admins.addrs)?;
+    let permittedvk_human = humanize_vec(deps, permittedvk.addrs)?;
+    let vklog_human = humanize_vec(deps, vklog.addrs)?;
 
     match what {
-        // 0 => return to_binary(&format!("seed: {:?}", seed.seed)),  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-        1 => return to_binary(&format!("created rns via option 2: {:}", idx)),
+        0 => return to_binary(&format!("seed: {:?}", seed.seed)),  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
+        1 => return to_binary(&format!("created rns via option 2: {:}", idx)),  // <-- remove or make admin function 
         2 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
-        3 => return to_binary(&format!("forward entropy hash: {:?}", config.forw_entropy_to_hash)),
-        4 => return to_binary(&format!("forward entropy addr: {:?}", config.forw_entropy_to_addr)),
+        3 => return to_binary(&format!("forward entropy hash: {:?}", configfw.forw_entropy_to_hash)),
+        4 => return to_binary(&format!("forward entropy addr: {:?}", configfw.forw_entropy_to_addr)),
         5 => return to_binary(&format!("admin address: {:?}", admin_human)),
-        _ => return Err(StdError::generic_err("invalid number. Try 0-5"))
+        6 => return to_binary(&format!("addresses that have been authenticated to generate VK: {:?}", permittedvk_human)),
+        7 => return to_binary(&format!("address that have generated VK before: {:?}", vklog_human)),
+        _ => return Err(StdError::generic_err("invalid number. Try 0-7"))
     };
 }
 
+fn humanize_vec<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+    canon_addr_vec: Vec<CanonicalAddr>,
+) -> StdResult<Vec<HumanAddr>> {
+    let mut human_addr_vec: Vec<HumanAddr> = vec![];
+    for addr in canon_addr_vec {
+        human_addr_vec.push(deps.api.human_address(&addr)?)
+    };
+
+    Ok(human_addr_vec)
+}
 
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -892,7 +955,7 @@ mod tests {
         let msg0 = QueryMsg::QueryConfig {what: 2};
         let res0 = &query(&mut deps, msg0).unwrap();
         let env = mock_env("creator", &coins(0, "token"));
-        let msg1 = HandleMsg::Configure {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
+        let msg1 = HandleMsg::ConfigureFwd {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
         let res1 = &handle(&mut deps, env, msg1);
         let msg2 = QueryMsg::QueryConfig {what: 2};
         let res2 = &query(&mut deps, msg2).unwrap();
@@ -913,14 +976,14 @@ mod tests {
         let msg0 = QueryMsg::QueryConfig {what: 2};
         let res0 = &query(&mut deps, msg0).unwrap();
         let env = mock_env("RN user", &coins(0, "token"));
-        let msg1 = HandleMsg::Configure {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
+        let msg1 = HandleMsg::ConfigureFwd {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
         let res1 = &handle(&mut deps, env, msg1);
         let msg2 = QueryMsg::QueryConfig {what: 2};
         let res2 = &query(&mut deps, msg2).unwrap();
 
         assert_eq!(from_binary::<String>(&res0).unwrap(), String::from("forward entropy?: false"));
         // assert_eq!(res1.as_ref().err().unwrap(), &StdError::generic_err("This is an admin function"));
-        assert_eq!(res1.is_err(), true);
+        assert!(res1.is_err());
         assert_eq!(res0, res2);
     }
 

@@ -13,11 +13,12 @@ pub struct InitMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HandleMsg {
-    Configure {   // for admin to configure forward entropy parameters
+    ConfigureFwd {   // for admin to configure forward entropy parameters
         forw_entropy: bool,
         forw_entropy_to_hash: Vec<String>,
         forw_entropy_to_addr: Vec<String>,
     },
+    ConfigureAuth {add: String},
     AddAdmin {add: String},
     RemoveAdmin {remove: String},
 
