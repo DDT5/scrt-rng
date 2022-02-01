@@ -64,6 +64,8 @@ impl HandleCallback for DonateEntropyMsg {
     const BLOCK_SIZE: usize = BLOCK_SIZE;
 }
 
+
+
 /////////////////////////////////////////////////////////////////////////////////
 // Init function
 /////////////////////////////////////////////////////////////////////////////////
@@ -149,7 +151,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
             forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr,
         } => try_configure_fwd(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr),
         HandleMsg::ConfigureAuth {add} => try_configure_auth(deps, env, add),
-        HandleMsg::GenerateViewingKey {entropy, .. } => try_generate_viewing_key(deps, env, entropy),
+        HandleMsg::GenerateViewingKey {entropy, receiver_code_hash, .. } => try_generate_viewing_key(deps, env, entropy, receiver_code_hash),
 
         HandleMsg::AddAdmin {add} => try_add_admin(deps, env, add),
         HandleMsg::RemoveAdmin {remove} => try_remove_admin(deps, env, remove),
@@ -431,7 +433,8 @@ fn try_configure_auth<S: Storage, A: Api, Q: Querier>(
 pub fn try_generate_viewing_key<S: Storage, A: Api, Q: Querier> (
     deps: &mut Extern<S, A, Q>,
     env: Env,
-    entropy: String
+    entropy: String,
+    receiver_code_hash: String,
 ) -> StdResult<HandleResponse> {
     // Only other scrt-rng protocol contracts can generate VK
     let auth_vec: AuthAddrs = load_state(&mut deps.storage, PERMITTED_VK)?;
@@ -452,12 +455,21 @@ pub fn try_generate_viewing_key<S: Storage, A: Api, Q: Querier> (
     vklog_vec.addrs.extend(deps.api.canonical_address(&env.message.sender));
     save_state(&mut deps.storage, VK_LOG, &vklog_vec.addrs)?;
 
+    // create cosmos msg with viewing key
+    let receive_vk_msg = HandleAnswer::ReceiveViewingKey {
+        key: key,
+    };
+
+    let cosmos_msg = receive_vk_msg.to_cosmos_msg(
+        receiver_code_hash.to_string(), 
+        env.message.sender, 
+        None
+    )?;
+
     Ok(HandleResponse {
-        messages: vec![],
+        messages: vec![cosmos_msg],
         log: vec![],
-        data: Some(to_binary(&HandleAnswer::GenerateViewingKey {
-            key,
-        })?),
+        data: None,
     })
 }
 

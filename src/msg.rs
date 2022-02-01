@@ -1,8 +1,10 @@
 use cosmwasm_std::{HumanAddr, Binary};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use crate::contract::{BLOCK_SIZE};
 
 use crate::viewing_key::ViewingKey;
+use secret_toolkit::utils::{HandleCallback};  
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InitMsg {
@@ -37,19 +39,24 @@ pub enum HandleMsg {
 
     GenerateViewingKey {
         entropy: String,
+        receiver_code_hash: String,
         padding: Option<String>,
     },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]  
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]  //PartialEq
 #[serde(rename_all = "snake_case")]
 pub enum HandleAnswer {
     Rn {
         rn: [u8; 32],
     },
-    GenerateViewingKey {
+    ReceiveViewingKey {
         key: ViewingKey,
     },
+}
+
+impl HandleCallback for HandleAnswer {
+    const BLOCK_SIZE: usize = BLOCK_SIZE;
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
