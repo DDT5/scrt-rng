@@ -1,6 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "QueryMsg",
+  "description": "Query messages",
   "anyOf": [
     {
       "type": "object",
@@ -9,52 +10,6 @@
       ],
       "properties": {
         "query_rn": {
-          "type": "object",
-          "required": [
-            "entropy"
-          ],
-          "properties": {
-            "entropy": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
-        "query_a_query"
-      ],
-      "properties": {
-        "query_a_query": {
-          "type": "object",
-          "required": [
-            "callback_code_hash",
-            "contract_addr",
-            "entropy"
-          ],
-          "properties": {
-            "callback_code_hash": {
-              "type": "string"
-            },
-            "contract_addr": {
-              "type": "string"
-            },
-            "entropy": {
-              "type": "string"
-            }
-          }
-        }
-      }
-    },
-    {
-      "type": "object",
-      "required": [
-        "auth_query"
-      ],
-      "properties": {
-        "auth_query": {
           "type": "object",
           "required": [
             "addr",
@@ -78,10 +33,10 @@
     {
       "type": "object",
       "required": [
-        "query_seed"
+        "query_config"
       ],
       "properties": {
-        "query_seed": {
+        "query_config": {
           "type": "object"
         }
       }

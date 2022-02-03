@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HandleAnswer",
+  "anyOf": [
+    {
+      "type": "object",
+      "required": [
+        "rn"
+      ],
+      "properties": {
+        "rn": {
+          "type": "object",
+          "required": [
+            "rn"
+          ],
+          "properties": {
+            "rn": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              },
+              "maxItems": 32,
+              "minItems": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "receive_viewing_key"
+      ],
+      "properties": {
+        "receive_viewing_key": {
+          "type": "object",
+          "required": [
+            "key"
+          ],
+          "properties": {
+            "key": {
+              "$ref": "#/definitions/ViewingKey"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "ViewingKey": {
+      "type": "string"
+    }
+  }
+}

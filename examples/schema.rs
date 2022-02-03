@@ -3,8 +3,8 @@ use std::fs::create_dir_all;
 
 use cosmwasm_schema::{export_schema, remove_schemas, schema_for};
 
-use scrt_rng::msg::{HandleMsg, InitMsg, QueryMsg};
-// use scrt_rng::state::CbMsg;
+use scrt_rng::msg::{HandleMsg, InitMsg, QueryMsg, HandleAnswer, QueryAnswer, InterContractHandle};
+
 
 fn main() {
     let mut out_dir = current_dir().unwrap();
@@ -14,6 +14,8 @@ fn main() {
 
     export_schema(&schema_for!(InitMsg), &out_dir);
     export_schema(&schema_for!(HandleMsg), &out_dir);
+    export_schema(&schema_for!(HandleAnswer), &out_dir);
+    export_schema(&schema_for!(InterContractHandle), &out_dir);
     export_schema(&schema_for!(QueryMsg), &out_dir);
-    // export_schema(&schema_for!(CbMsg), &out_dir);
+    export_schema(&schema_for!(QueryAnswer), &out_dir);
 }

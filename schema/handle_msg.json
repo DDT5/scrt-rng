@@ -1,14 +1,105 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "HandleMsg",
+  "description": "Handle messages. For RNG users, the three of these matter. `callback_rn`: generates a random number in a single transaction. `create_rn` and `fulfill_rn`: functions required for the two-transaction RNG.",
   "anyOf": [
     {
       "type": "object",
       "required": [
-        "entropy_string"
+        "configure_fwd"
       ],
       "properties": {
-        "entropy_string": {
+        "configure_fwd": {
+          "type": "object",
+          "required": [
+            "forw_entropy",
+            "forw_entropy_to_addr",
+            "forw_entropy_to_hash"
+          ],
+          "properties": {
+            "forw_entropy": {
+              "type": "boolean"
+            },
+            "forw_entropy_to_addr": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "forw_entropy_to_hash": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "configure_auth"
+      ],
+      "properties": {
+        "configure_auth": {
+          "type": "object",
+          "required": [
+            "add"
+          ],
+          "properties": {
+            "add": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "add_admin"
+      ],
+      "properties": {
+        "add_admin": {
+          "type": "object",
+          "required": [
+            "add"
+          ],
+          "properties": {
+            "add": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "remove_admin"
+      ],
+      "properties": {
+        "remove_admin": {
+          "type": "object",
+          "required": [
+            "remove"
+          ],
+          "properties": {
+            "remove": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "donate_entropy"
+      ],
+      "properties": {
+        "donate_entropy": {
           "type": "object",
           "required": [
             "entropy"
@@ -24,10 +115,10 @@
     {
       "type": "object",
       "required": [
-        "rn_string"
+        "request_rn"
       ],
       "properties": {
-        "rn_string": {
+        "request_rn": {
           "type": "object",
           "required": [
             "entropy"
@@ -74,6 +165,82 @@
     {
       "type": "object",
       "required": [
+        "create_rn"
+      ],
+      "properties": {
+        "create_rn": {
+          "type": "object",
+          "required": [
+            "cb_msg",
+            "entropy",
+            "receiver_code_hash"
+          ],
+          "properties": {
+            "cb_msg": {
+              "$ref": "#/definitions/Binary"
+            },
+            "entropy": {
+              "type": "string"
+            },
+            "max_blk_delay": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "purpose": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_addr": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_code_hash": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "fulfill_rn"
+      ],
+      "properties": {
+        "fulfill_rn": {
+          "type": "object",
+          "required": [
+            "creator_addr",
+            "receiver_code_hash"
+          ],
+          "properties": {
+            "creator_addr": {
+              "type": "string"
+            },
+            "purpose": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "receiver_code_hash": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
         "receive_rn"
       ],
       "properties": {
@@ -110,7 +277,8 @@
         "generate_viewing_key": {
           "type": "object",
           "required": [
-            "entropy"
+            "entropy",
+            "receiver_code_hash"
           ],
           "properties": {
             "entropy": {
@@ -121,6 +289,9 @@
                 "string",
                 "null"
               ]
+            },
+            "receiver_code_hash": {
+              "type": "string"
             }
           }
         }

@@ -164,76 +164,85 @@ function quiet_wait_for_compute_tx() {
 
 # upload all three contracts at once 
 secretcli tx compute store rng.wasm.gz --from a --gas 4000000 -y;
-secretcli tx compute store user.wasm.gz --from b --gas 4000000 -y; 
-txh="$(tx_of secretcli tx compute store user.wasm.gz --from c --gas 4000000 -y)";
+secretcli tx compute store rng.wasm.gz --from b --gas 4000000 -y; 
+txh="$(tx_of secretcli tx compute store rng.wasm.gz --from c --gas 4000000 -y)";
 wait_for_tx $txh "waiting";
 # upload another (third) scrt-rng and a second user
-txh="$(tx_of secretcli tx compute store rng.wasm.gz --from a --gas 4000000 -y)";
-txh="$(tx_of secretcli tx compute store rng.wasm.gz --from b --gas 4000000 -y)";
+secretcli tx compute store user.wasm.gz --from a --gas 4000000 -y;
+secretcli tx compute store user.wasm.gz --from b --gas 4000000 -y;
+secretcli tx compute store user.wasm.gz --from c --gas 4000000 -y;
+txh="$(tx_of secretcli tx compute store user.wasm.gz --from d --gas 4000000 -y)";
 wait_for_tx $txh "waiting";
 
 # secretcli query compute list-code
 
-INIT='{"initseed": "initseed input String","prng_seed":"seed string here"}'; 
-CODE_ID=1 ;
-txh="$(tx_of secretcli tx compute instantiate $CODE_ID "$INIT" --from a --label "my ORACLE!" -y)"
-wait_for_compute_tx $txh "waiting";
-
-# secretcli query compute list-contract-by-code 1
-
 AA="$(secretcli keys show --address a)";  
 BB="$(secretcli keys show --address b)";  
 CC="$(secretcli keys show --address c)";  
-CONTRACT="$(secretcli query compute list-contract-by-code $CODE_ID | jq -er '.[].address')";
-HASH="$(secretcli q compute contract-hash $CONTRACT | sed 's/^0x//')";
 
+# instantiate scrt-rng contracts
+INIT='{"initseed": "initseed input String","prng_seed":"seed string here"}'; 
+CODE_IDa=1; secretcli tx compute instantiate $CODE_IDa "$INIT" --from a --label "my ORACLE!" -y
+CODE_IDb=2; secretcli tx compute instantiate $CODE_IDb "$INIT" --from b --label "my SECOND oracle!" -y
+CODE_IDc=3; txh="$(tx_of secretcli tx compute instantiate $CODE_IDc "$INIT" --from c --label "my THIRD oracle!" -y)"
+wait_for_compute_tx $txh "waiting";
+
+CONTRACT="$(secretcli query compute list-contract-by-code $CODE_IDa | jq -er '.[].address')";
+HASH="$(secretcli q compute contract-hash $CONTRACT | sed 's/^0x//')";
+CONTRACT2="$(secretcli query compute list-contract-by-code $CODE_IDb | jq -er '.[].address')";
+HASH2="$(secretcli q compute contract-hash $CONTRACT2 | sed 's/^0x//')";
+CONTRACT3="$(secretcli query compute list-contract-by-code $CODE_IDc | jq -er '.[].address')";
+HASH3="$(secretcli q compute contract-hash $CONTRACT3 | sed 's/^0x//')";
+
+# secretcli query compute list-contract-by-code 1
 
 # instantiate rn-user(s)
-INIT='{"rng_addr":"'"$CONTRACT"'"}' 
-CODE_IDa=2;
-txh="$(tx_of secretcli tx compute instantiate $CODE_IDa "$INIT" --from a --label "rn USER!" -y)"
-
-CODE_IDb=3 ;
-txh="$(tx_of secretcli tx compute instantiate $CODE_IDb "$INIT" --from b --label "rn USER 2!" -y)"
+INIT='{"rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}' 
+CODE_IDa=4; secretcli tx compute instantiate $CODE_IDa "$INIT" --from a --label "rn USER!" -y
+CODE_IDb=5; secretcli tx compute instantiate $CODE_IDb "$INIT" --from b --label "rn USER 2!" -y
+CODE_IDc=6; secretcli tx compute instantiate $CODE_IDc "$INIT" --from c --label "rn USER 3!" -y
+CODE_IDd=7; txh="$(tx_of secretcli tx compute instantiate $CODE_IDd "$INIT" --from d --label "rn USER 4!" -y)"
 wait_for_compute_tx $txh "waiting";
 
 USER="$(secretcli query compute list-contract-by-code $CODE_IDa | jq -er '.[].address')";
 USER_H="$(secretcli q compute contract-hash $USER | sed 's/^0x//')";
-
 USER2="$(secretcli query compute list-contract-by-code $CODE_IDb | jq -er '.[].address')";
 USER2_H="$(secretcli q compute contract-hash $USER2 | sed 's/^0x//')";
+USER3="$(secretcli query compute list-contract-by-code $CODE_IDc | jq -er '.[].address')";
+USER3_H="$(secretcli q compute contract-hash $USER3 | sed 's/^0x//')";
+USER4="$(secretcli query compute list-contract-by-code $CODE_IDd | jq -er '.[].address')";
+USER4_H="$(secretcli q compute contract-hash $USER4 | sed 's/^0x//')";
 
-# instantiate second and third rn-user 
-INIT='{"initseed": "initseed input String", "prng_seed":"seed string here"}'
-CODE_IDa=4 ;
-txh="$(tx_of secretcli tx compute instantiate $CODE_IDa "$INIT" --from a --label "my SECOND oracle!" -y)"
 
-CODE_IDb=5 ;
-txh="$(tx_of secretcli tx compute instantiate $CODE_IDb "$INIT" --from b --label "my THIRD oracle!" -y)"
-wait_for_compute_tx $txh "waiting";
-
-CONTRACT2="$(secretcli query compute list-contract-by-code $CODE_IDa | jq -er '.[].address')";
-HASH2="$(secretcli q compute contract-hash $CONTRACT2 | sed 's/^0x//')";
-CONTRACT3="$(secretcli query compute list-contract-by-code $CODE_IDb | jq -er '.[].address')";
-HASH3="$(secretcli q compute contract-hash $CONTRACT3 | sed 's/^0x//')";
 
 # ########################################################################
 # test functions
 # ########################################################################
 
 # ------------------------------------------------------------------------
+# Option 0 functions
+# ------------------------------------------------------------------------
+
+function test_op0() {
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"request_rn":{"entropy":"foo bar"}}' --from a --gas 300000 -y)"
+    wait_for_compute_tx $txh "waiting for tx"
+    assert_eq "$(data_of secretcli q compute tx $txh | jq '.rn[]' | jq length)" 32
+}
+
+# ------------------------------------------------------------------------
 # Option 1 functions
 # ------------------------------------------------------------------------
 function test_op1() {
+    callbackmsg='message before RN'
+    callbackbinary="$(base64 <<< $callbackmsg)" 
     # gas log for callback_rn called via cli
-    callbackbinary="$(base64 <<<'message before RN')"
+
     txh0="$(tx_of secretcli tx compute execute $CONTRACT '{"callback_rn": {"entropy":"foo bar","cb_msg":"'"$callbackbinary"'", "callback_code_hash":"'"$HASH"'", "contract_addr":"'"$CONTRACT"'"}}' --gas 300000 --from a -y)";
     wait_for_compute_tx $txh0 "waiting for tx"
     log_gas $txh0 "callback_rn-through-cli"
 
     # User contract can callback_rn and receive cb_msg, and RN (seed) changes from the two consecutive callback_rn calls
-    callbackmsg='message before RN from user'
-    callbackbinary="$(base64 <<< $callbackmsg)" 
+
     txh0="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
     txh1="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
     wait_for_compute_tx $txh1 "waiting for tx"
@@ -253,6 +262,10 @@ function test_op1() {
 # Option 2 functions
 # ------------------------------------------------------------------------
 function test_op2() {
+    # cb_msg0_msg="$1"
+    # cb_msg0="$(base64 <<< $cb_msg0_msg)";
+    # PURPOSE="$2"
+    
     cb_msg0_msg='message from user0'
     cb_msg0="$(base64 <<< $cb_msg0_msg)";
     PURPOSE="roll dice"
@@ -266,15 +279,14 @@ function test_op2() {
     txh3="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$AA"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from c --gas 300000 -y)"
     txh4="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$BB"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from d --gas 300000 -y)"
     wait_for_compute_tx $txh4 "waiting for tx";
-    seed0="$(secretcli q compute query $CONTRACT '{"query_config": {"what":0}}')"
+    seed0="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq -r '.contract_config.seed')"
     
     txh5="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$CC"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
     wait_for_compute_tx $txh5 "waiting for tx"
-    seed1="$(secretcli q compute query $CONTRACT '{"query_config": {"what":0}}')"
+    seed1="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq -r '.contract_config.seed')"
     
     echo "testing: create_rn and fulfill_rn"
-    assert_ne "$(secretcli q compute tx $txh3 | jq '.output_log[]')" ""
-    # assert_eq "$(secretcli q compute tx $txh2 | jq '.output_error[]')" "" 
+    assert_ne "$(secretcli q compute tx $txh3 | jq '.output_log[]')" ""  #<---
 
     RN0="$(secretcli q compute tx $txh3 | jq -r '.output_log[].attributes[] | select(.key=="rn") | .value')"
     RN1="$(secretcli q compute tx $txh4 | jq -r '.output_log[].attributes[] | select(.key=="rn") | .value')"
@@ -294,23 +306,35 @@ function test_op2() {
     assert_ne $seed0 ""; assert_ne $seed1 ""
     
     log_gas $txh0 "create_rn-via-cli"
-    log_gas $txh3 "fulfill_rn-via-rn_user"
 
-    # User contract can create_rn and fulfill_rn
-    txh0="$(tx_of secretcli tx compute execute $USER '{"trigger_create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'", "receiver_addr":"'"$USER"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1,"rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
-    wait_for_compute_tx $txh0 "waiting"
+    # User contract can create_rn and fulfill_rn. a: all fields with Some(), b: receiver_addr = None, c: purpose = None, d: max_blk_delay = None
+    txh0a="$(tx_of secretcli tx compute execute $USER '{"trigger_create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'", "receiver_addr":"'"$USER"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1,"rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
+    txh0b="$(tx_of secretcli tx compute execute $USER2 '{"trigger_create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER2_H"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1,"rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
+    txh0c="$(tx_of secretcli tx compute execute $USER3 '{"trigger_create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER3_H"'", "receiver_addr":"'"$USER3"'", "max_blk_delay":1,"rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from c --gas 300000 -y)"
+    txh0d="$(tx_of secretcli tx compute execute $USER4 '{"trigger_create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER4_H"'", "receiver_addr":"'"$USER4"'", "purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from d --gas 300000 -y)"
+    wait_for_compute_tx $txh0d "waiting"
 
-    txh1="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$USER"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
-    wait_for_compute_tx $txh1 "waiting"
+    txh1a="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$USER"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
+    txh1b="$(tx_of secretcli tx compute execute $USER2 '{"trigger_fulfill_rn":{"creator_addr":"'"$USER2"'","receiver_code_hash":"'"$USER2_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
+    txh1c="$(tx_of secretcli tx compute execute $USER3 '{"trigger_fulfill_rn":{"creator_addr":"'"$USER3"'","receiver_code_hash":"'"$USER3_H"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from c --gas 300000 -y)"
+    txh1d="$(tx_of secretcli tx compute execute $USER4 '{"trigger_fulfill_rn":{"creator_addr":"'"$USER4"'","receiver_code_hash":"'"$USER4_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from d --gas 300000 -y)"
+    wait_for_compute_tx $txh1d "waiting"
 
-    echo "testing: contract create_rn"
-    assert_eq "$(secretcli q compute tx $txh0 | jq '.output_error[]')" "" 
+    log_gas $txh0a "create_rn-via-rn_user"
+    log_gas $txh1a "fulfill_rn-via-rn_user"
+
+    echo "testing: contract create_rn" 
+    for tx0 in $txh0a $txh0b $txh0c $txh0d; do
+        assert_eq "$(secretcli q compute tx $tx0 | jq '.output_error[]')" ""  #<---
+    done
 
     echo "testing: contract fulfill_rn: correct cb_msg: $cb_msg0_msg"
-    assert_eq "$(secretcli q compute tx $txh1 | jq -r '.output_log[].attributes[] | select(.key=="cb_msg") | .value')" "$cb_msg0_msg" 
+    for tx1 in $txh1a $txh1b $txh1c $txh1d; do
+        assert_eq "$(secretcli q compute tx $tx1 | jq -r '.output_log[].attributes[] | select(.key=="cb_msg") | .value')" "$cb_msg0_msg" 
+    done
 
     echo "testing: contract fulfill_rn: correct purpose: $PURPOSE"
-    assert_eq "$(secretcli q compute tx $txh1 | jq -r '.output_log[].attributes[] | select(.key=="purpose") | .value')" "Some(\"$PURPOSE\")" 
+    assert_eq "$(secretcli q compute tx $txh1a | jq -r '.output_log[].attributes[] | select(.key=="purpose") | .value')" "Some(\"$PURPOSE\")" 
 
     # testing: create RN and fulfill RN in same block -> error
     txh="$(tx_of secretcli tx compute execute $CONTRACT '{"create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'", "receiver_addr":"'"$USER"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1}}' --from a --gas 300000 -y)"
@@ -319,15 +343,18 @@ function test_op2() {
     echo "testing: create RN and fulfill RN in same block -> error"
     assert_eq "$(secretcli q compute tx $txh | jq '.output_error[].msg')" "\"please wait for a short time between creating rn and transmitting rn"\"
 
-    # max block delay exceeded
-    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'", "receiver_addr":"'"$USER"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1}}' --from a --gas 300000 -y)"
-    wait_for_compute_tx $txh "waiting for tx"
+    # max block delay. a: max_blk_delay=1 -> exceeded, b: max_blk_delay=None -> Ok
+    txha="$(tx_of secretcli tx compute execute $CONTRACT '{"create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'", "receiver_addr":"'"$USER"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1}}' --from a --gas 300000 -y)"
+    txhb="$(tx_of secretcli tx compute execute $CONTRACT '{"create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER2_H"'", "receiver_addr":"'"$USER2"'", "purpose":"'"$PURPOSE"'"}}' --from b --gas 300000 -y)"
+    wait_for_compute_tx $txhb "waiting for tx"
     txh="$(tx_of secretcli tx compute execute $CONTRACT '{"request_rn": {"entropy":"foo bar"}}' --from a -y)"
     quiet_wait_for_compute_tx $txh "pausing..."
-    txh="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$AA"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
-    wait_for_compute_tx $txh "waiting for tx"
+    txha="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$AA"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
+    txhb="$(tx_of secretcli tx compute execute $USER2 '{"trigger_fulfill_rn":{"creator_addr":"'"$BB"'","receiver_code_hash":"'"$USER2_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
+    wait_for_compute_tx $txhb "waiting for tx"
     echo "testing: max block delay exceeded"
-    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[].msg')" '"delay between create_rn and transmit_rn exceeds max delay specified by user"'
+    assert_eq "$(secretcli q compute tx $txha | jq '.output_error[].msg')" '"delay between create_rn and transmit_rn exceeds max delay specified by user"'
+    assert_eq "$(secretcli q compute tx $txhb | jq -r '.output_log[].attributes[] | select(.key=="cb_msg") | .value')" "$cb_msg0_msg" 
 
     # cannot fulfill_rn more than once
     txh="$(tx_of secretcli tx compute execute $CONTRACT '{"create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'", "receiver_addr":"'"$USER"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1}}' --from a --gas 300000 -y)"
@@ -335,7 +362,7 @@ function test_op2() {
     txh="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$AA"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
     wait_for_compute_tx $txh "waiting for tx"
     echo "testing: cannot fulfill_rn more than once -- first attempt should succeed"
-    assert_ne "$(secretcli q compute tx $txh | jq '.output_log[]')" ""
+    assert_ne "$(secretcli q compute tx $txh | jq '.output_log[]')" "" #<---
 
     txh="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$AA"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 300000 -y)"
     wait_for_compute_tx $txh "waiting for tx"
@@ -376,77 +403,204 @@ function test_op2() {
     assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error | keys[]')" "generic_err" 
 }
 
-# Works when Option<T> inputs are None
-# Todo!() 
-
 # ------------------------------------------------------------------------
 # Admin functions
 # ------------------------------------------------------------------------
 
-# Non-admin cannot access config function...
-# txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":true,"forw_entropy_to_hash":["'"$HASH2"'","'"$HASH3"'"],"forw_entropy_to_addr":["'"$CONTRACT2"'","'"$CONTRACT3"'"]}}' --from a -y)"
-# wait_for_compute_tx $txh "waiting for tx";
-# assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error | keys[]')" "generic_err"
+function test_admin_func() {
+    # Save original config
+    config0="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.')"
 
-# ...or change_admin function
+    # Admin can add new admin
+    secretcli tx compute execute $CONTRACT '{"add_admin":{"add":"'"$BB"'"}}' --from a -y
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"add_admin":{"add":"'"$CC"'"}}' --from b -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    admin_count="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.admin' | jq length)"
+    assert_eq $admin_count 3
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
-# Admin can add new admin
+    # Admin can remove new admin c
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"remove_admin":{"remove":"'"$CC"'"}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    admin_count="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.admin' | jq length)"
+    assert_eq $admin_count 2
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
-# New admin cannot remove creator
+    # Creator or Admins cannot remove creator
+    txha="$(tx_of secretcli tx compute execute $CONTRACT '{"remove_admin":{"remove":"'"$AA"'"}}' --from a -y)"
+    txhb="$(tx_of secretcli tx compute execute $CONTRACT '{"remove_admin":{"remove":"'"$AA"'"}}' --from b -y)"
+    wait_for_compute_tx $txhb "waiting for tx";
+    admin_count="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.admin' | jq length)"
+    assert_eq $admin_count 2
+    assert_eq "$(secretcli q compute tx $txha | jq -r '.output_error[].msg')" "Cannot remove creator as admin" 
+    assert_eq "$(secretcli q compute tx $txhb | jq -r '.output_error[].msg')" "Cannot remove creator as admin" 
 
-# Creator cannot remove creator
+    # New admin can change config (fwd entropy as test)
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":true,"forw_entropy_to_hash":["'"$HASH2"'","'"$HASH3"'"],"forw_entropy_to_addr":["'"$CONTRACT2"'","'"$CONTRACT3"'"]}}' --from b -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    fwd_bool="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.forw_entropy')"
+    assert_eq $fwd_bool "true"
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
-# New admin can change config
+    # Non-admin cannot add new admin
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"add_admin":{"add":"'"$DD"'"}}' --from c -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error[].msg')" "This is an authenticated function" 
 
-# Creator can change config
+    # Non-admin cannot remove admin b
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"remove_admin":{"remove":"'"$BB"'"}}' --from c -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error[].msg')" "This is an authenticated function" 
 
-# New admin can remove itself as admin
+    # New admin can remove itself as admin
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"remove_admin":{"remove":"'"$BB"'"}}' --from b -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    admin_count="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.admin' | jq length)"
+    assert_eq $admin_count 1
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
+    # Creator can change config: Change back settings to default
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":false,"forw_entropy_to_hash":[],"forw_entropy_to_addr":[]}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    config1="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.')"
+    echo "test_admin_func: config back to original"
+    assert_eq "$config1" "$config0"
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
+}
 
 # ------------------------------------------------------------------------
 # Forward entropy functions
 # ------------------------------------------------------------------------
 
-# Admin to config forward entropy
+function test_fwd_entropy() {
+    # Non-admin cannot access fwd entropy config function...
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":true,"forw_entropy_to_hash":["'"$HASH2"'","'"$HASH3"'"],"forw_entropy_to_addr":["'"$CONTRACT2"'","'"$CONTRACT3"'"]}}' --from b -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    fwd_bool="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.forw_entropy')"
+    assert_eq $fwd_bool "false"
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error[].msg')" "This is an authenticated function" 
 
-# Forward entropy changes seed of Scrt-RNG 2
+    # Admin can config forward entropy
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":true,"forw_entropy_to_hash":["'"$HASH2"'","'"$HASH3"'"],"forw_entropy_to_addr":["'"$CONTRACT2"'","'"$CONTRACT3"'"]}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    fwd_bool="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.forw_entropy')"
+    assert_eq $fwd_bool "true"
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
-# Forward entropy -- print gas before and after
+    # Forward entropy changes seed of Scrt-RNG 2, when: request_rn, callback_rn, create_rn, fulfill_rn
+    seed0="$(secretcli q compute query $CONTRACT2 '{"query_config": {}}' | jq -r '.contract_config.seed')"
+    seeda="$(secretcli q compute query $CONTRACT3 '{"query_config": {}}' | jq -r '.contract_config.seed')"
 
-# Scrt-RNG 2 can query from Scrt-RNG 1 to benefit from entropy
+    txh0="$(tx_of secretcli tx compute execute $CONTRACT '{"request_rn":{"entropy":"foo bar"}}' --from a --gas 300000 -y)"
+    wait_for_compute_tx $txh0 "waiting for tx"
+    seed1="$(secretcli q compute query $CONTRACT2 '{"query_config": {}}' | jq -r '.contract_config.seed')"
+    seedb="$(secretcli q compute query $CONTRACT3 '{"query_config": {}}' | jq -r '.contract_config.seed')"
 
-# Gas impact of querying from Scrt-RNG 1 to get entropy
+    txh1="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
+    wait_for_compute_tx $txh1 "waiting for tx";
+    seed2="$(secretcli q compute query $CONTRACT2 '{"query_config": {}}' | jq -r '.contract_config.seed')"
+
+    txh2="$(tx_of secretcli tx compute execute $CONTRACT '{"create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'", "receiver_addr":"'"$USER"'", "purpose":"'"$PURPOSE"'","max_blk_delay":1}}' --from a --gas 300000 -y)" 
+    wait_for_compute_tx $txh2 "waiting for tx";
+    seed3="$(secretcli q compute query $CONTRACT2 '{"query_config": {}}' | jq -r '.contract_config.seed')"
+
+    txh3="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$AA"'","receiver_code_hash":"'"$USER_H"'","purpose":"'"$PURPOSE"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from c --gas 300000 -y)"
+    wait_for_compute_tx $txh3 "waiting for tx";
+    seed4="$(secretcli q compute query $CONTRACT2 '{"query_config": {}}' | jq -r '.contract_config.seed')"
+
+    echo "test_fwd_entropy: seed changed for every tx. $seed0 vs $seed1 vs $seed2 vs $seed3 vs $seed4"
+    assert_ne $seed0 $seed1; assert_ne $seed1 $seed2; assert_ne $seed2 $seed3; assert_ne $seed3 $seed4
+    assert_ne $seeda $seedb
+    assert_ne $seed0 ""; assert_ne $seed1 ""; assert_ne $seed2 ""; assert_ne $seed3 ""; assert_ne $seed4 ""; assert_ne $seeda ""; assert_ne $seedb ""
+
+    # log gas with fwd entropy (to two addrs)
+    log_gas $txh0 "request_rn-with-fwd-entropy-to-two-contracts"
+    log_gas $txh1 "callback_rn-via-rn_user-contract-with-fwd-entropy-to-two-contracts"
+    log_gas $txh2 "create_rn-with-fwd-entropy-to-two-contracts"
+    log_gas $txh3 "fulfill_rn-with-fwd-entropy-to-two-contracts"
+}
 
 # ------------------------------------------------------------------------
 # Authenticated query checks
 # ------------------------------------------------------------------------
 
-# Non authenticated contract cannot generate VK
+function test_auth_queries() {
+    # Non authenticated contract cannot generate VK
+    txh="$(tx_of secretcli tx compute execute $USER '{"trigger_generate_vk":{"receiver_code_hash":"'"$USER_H"'", "rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    echo "testing: non authenticated contract cannot generate and receive viewing key"
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error[].msg')" "This is an authenticated function" 
 
-# Non-admin cannot add auth contract
+    # Non-admin cannot add auth contract
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_auth":{"add":"'"$USER"'"}}' --from b -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    echo "testing: Non-admin cannot add auth contract for vk"
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error[].msg')" "This is an authenticated function" 
 
-# Admin can add auth contract
+    # Admin can add auth contract
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_auth":{"add":"'"$USER"'"}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    echo "testing: Admin can add auth contract for vk"
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
-# Authenticated contract can generate VK
+    # Authenticated contract can generate VK
+    txh="$(tx_of secretcli tx compute execute $USER '{"trigger_generate_vk":{"receiver_code_hash":"'"$USER_H"'", "rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 300000 -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    echo "testing: authenticated contract can generate and receive viewing key"
+    vk1="$(secretcli q compute tx $txh | jq -r '.output_log[].attributes[] | select(.key=="added vk") | .value')"
+    assert_eq ${vk1:0:8} "api_key_"
 
-# Authenticated contract can auth_query to get RN
+    # Authenticated contract can auth_query to get RN
+    txh="$(tx_of secretcli tx compute execute $USER '{"trigger_query_rn":{"entropy":"foo bar"}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    echo "testing: authenticated contract can auth_query to get RN"
+    assert_ne "$(secretcli q compute tx $txh | jq '.output_log[]')" "" #<--
 
-# Non authenticated contract cannot auth_query to get RN (wrong address or VK)
+    # Non authenticated contract cannot auth_query to get RN (wrong address or VK)
+    txh="$(tx_of secretcli tx compute execute $USER '{"trigger_query_rn":{"entropy":"foo bar","optionalvk":"api_key_BobJLiwRSwnFgsI+6Mv2xUgTyNSF7Dob+DwUZDsaJkg="}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    echo "testing: Non authenticated contract cannot auth_query to get RN (wrong VK)"
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error | keys[]')" "unauthorized"
 
-# query_config works? (for transparency)
+    txh="$(tx_of secretcli tx compute execute $USER2 '{"trigger_query_rn":{"entropy":"foo bar","optionalvk":"'"$vk1"'"}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    echo "testing: Non authenticated contract cannot auth_query to get RN (wrong address)"
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error | keys[]')" "unauthorized" 
 
-# ------------------------------------------------------------------------
-# Cross chain interface
-# ------------------------------------------------------------------------
+    # Queries don't change RN
+    txh0="$(tx_of secretcli tx compute execute $USER '{"trigger_query_rn":{"entropy":"foo bar"}}' --from a -y)"
+    txh1="$(tx_of secretcli tx compute execute $USER '{"trigger_query_rn":{"entropy":"foo bar"}}' --from b -y)"
+    wait_for_compute_tx $txh1 "waiting for tx";
+    RN0="$(secretcli q compute tx $txh0 | jq -r '.output_log[].attributes[] | select(.key=="output")' | jq '.value')"
+    RN1="$(secretcli q compute tx $txh1 | jq -r '.output_log[].attributes[] | select(.key=="output")' | jq '.value')"
+    assert_eq "$RN0" "$RN1"
 
-# Todo!()
+    # Contract-to-contract queries see mid-block states
+    txh0="$(tx_of secretcli tx compute execute $USER '{"trigger_query_rn":{"entropy":"foo bar"}}' --from a -y)"
+    txhmid="$(tx_of secretcli tx compute execute $CONTRACT '{"request_rn":{"entropy":"foo bar"}}' --from c --gas 300000 -y)"
+    txh1="$(tx_of secretcli tx compute execute $USER '{"trigger_query_rn":{"entropy":"foo bar"}}' --from b -y)"
+    wait_for_compute_tx $txh1 "waiting for tx";
+    RN0="$(secretcli q compute tx $txh0 | jq -r '.output_log[].attributes[] | select(.key=="output")' | jq '.value')"
+    RN1="$(secretcli q compute tx $txh1 | jq -r '.output_log[].attributes[] | select(.key=="output")' | jq '.value')"
+    echo "Auth query tests: Contract-to-contract queries see mid-block states"
+    assert_ne "$RN0" "$RN1"
+    log_gas $txh0 "user-authenticated-query_rn"
+}
 
 
 
 # ########################################################################
 # Execute tests
 # ########################################################################
+
+test_op0
 test_op1
 test_op2
+test_admin_func
+test_fwd_entropy
+test_auth_queries
+
 # Print gas usage
-echo "$gas_log"
+echo ""; echo "$gas_log"
+echo ""; echo "ALL TESTS COMPLETED SUCCESSFULLY"
+echo "warning: switch off ability to query seed, before launching on testnet or mainnet"

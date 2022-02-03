@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "InterContractHandle",
+  "description": "User's contract needs a handle function in order to receive the random number. A handle function called `receive_rn` is required to use the `callback_rn` RNG. A handle function called `receive_f_rn` is required to use the `fulfill_rn` RNG.",
+  "anyOf": [
+    {
+      "type": "object",
+      "required": [
+        "receive_rn"
+      ],
+      "properties": {
+        "receive_rn": {
+          "type": "object",
+          "required": [
+            "cb_msg",
+            "rn"
+          ],
+          "properties": {
+            "cb_msg": {
+              "$ref": "#/definitions/Binary"
+            },
+            "rn": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              },
+              "maxItems": 32,
+              "minItems": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "receive_f_rn"
+      ],
+      "properties": {
+        "receive_f_rn": {
+          "type": "object",
+          "required": [
+            "cb_msg",
+            "rn"
+          ],
+          "properties": {
+            "cb_msg": {
+              "$ref": "#/definitions/Binary"
+            },
+            "purpose": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rn": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              },
+              "maxItems": 32,
+              "minItems": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
+        "donate_entropy"
+      ],
+      "properties": {
+        "donate_entropy": {
+          "type": "object",
+          "required": [
+            "entropy"
+          ],
+          "properties": {
+            "entropy": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "Binary": {
+      "description": "Binary is a wrapper around Vec<u8> to add base64 de/serialization with serde. It also adds some helper methods to help encode inline.\n\nThis is only needed as serde-json-{core,wasm} has a horrible encoding for Vec<u8>",
+      "type": "string"
+    }
+  }
+}

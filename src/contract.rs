@@ -1,6 +1,3 @@
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};  
-
 use cosmwasm_std::{
     to_binary, Api, Binary, Env, Extern, HandleResponse, InitResponse, Querier, debug_print,
     StdError, StdResult, QueryResult, 
@@ -8,7 +5,7 @@ use cosmwasm_std::{
     HumanAddr, log, CanonicalAddr,
 };
 
-use crate::msg::{InitMsg, HandleMsg, HandleAnswer, QueryMsg, QueryAnswer}; 
+use crate::msg::{InitMsg, HandleMsg, HandleAnswer, InterContractHandle, QueryMsg, QueryAnswer}; 
 use crate::state::{
     Seed, EntrpChk, AuthAddrs, ForwEntrpConfig, PrngSeed, RnStorKy, RnStorVl,
     load_state, save_state, write_viewing_key, read_viewing_key, idx_read, idx_write, write_rn_store, read_rn_store, remove_rn_store,
@@ -26,45 +23,6 @@ use sha2::{Digest};
 use std::convert::TryInto;
 
 pub const BLOCK_SIZE: usize = 256;
-
-/////////////////////////////////////////////////////////////////////////////////
-// Enums for callback
-/////////////////////////////////////////////////////////////////////////////////
-
-// Calling receive_rn handle in user's contract ("Option 1")
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReceiveRnHandleMsg {
-    ReceiveRn {rn: [u8; 32], cb_msg: Binary},
-}
-
-impl HandleCallback for ReceiveRnHandleMsg {
-    const BLOCK_SIZE: usize = BLOCK_SIZE;
-}
-
-// Calling receive_f_rn handle in receiver's contract ("Option 2")
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReceiveFRnHandleMsg {
-    ReceiveFRn {rn: [u8; 32], cb_msg: Binary, purpose: Option<String>},
-}
-
-impl HandleCallback for ReceiveFRnHandleMsg {
-    const BLOCK_SIZE: usize = BLOCK_SIZE;
-}
-
-// Calling donate_entropy in another contract
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum DonateEntropyMsg {
-    DonateEntropy {entropy: String},
-}
-
-impl HandleCallback for DonateEntropyMsg {
-    const BLOCK_SIZE: usize = BLOCK_SIZE;
-}
-
-
 
 /////////////////////////////////////////////////////////////////////////////////
 // Init function
@@ -97,8 +55,8 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
 
     // config on which address to forward entropy to (a scrt-rng2 contract)
     let config = ForwEntrpConfig {
-        forw_entropy_to_hash: vec![String::default()],
-        forw_entropy_to_addr: vec![String::default()],
+        forw_entropy_to_hash: vec![],
+        forw_entropy_to_addr: vec![],
     };
     save_state(&mut deps.storage, FW_CONFIG_KEY, &config)?;
 
@@ -174,8 +132,13 @@ pub fn try_request_rn<S:Storage, A:Api, Q:Querier>(
     entropy: String,
 ) -> StdResult<HandleResponse> {
     let rn_output = get_rn(deps, &env, &entropy)?;
+    
+    //Potentially forward entropy to another contract
+    let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
+    let messages = cosmos_msg_fwd_entropy.unwrap_or_else(|| vec![]);
+
     Ok(HandleResponse {
-        messages: vec![],
+        messages: messages,
         log: vec![],
         data: Some(to_binary(&HandleAnswer::Rn {
             rn: rn_output,
@@ -200,10 +163,8 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
     // call generate RN function
     let rn_output = get_rn(deps, &env, &entropy)?;
 
-    debug_print!("try_callback_rn: passed get_rn");
-
     // Send message back to consumer (to receive_rn)
-    let receive_rn_msg = ReceiveRnHandleMsg::ReceiveRn {
+    let receive_rn_msg = InterContractHandle::ReceiveRn {
         rn: rn_output,
         cb_msg: cb_msg
     };
@@ -215,9 +176,7 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
     )?;
 
     //Potentially forward entropy to another contract
-    debug_print!("try_callback_rn: forward entropy initiated");
     let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
-    debug_print!("try_callback_rn: forward entropy done");
 
     // create multiple messages
     let mut messages = vec![cosmos_msg];
@@ -273,11 +232,8 @@ pub fn try_create_rn<S: Storage, A: Api, Q: Querier>(
     idx_write(&mut deps.storage).save(&(&idx+1))?;
 
     //Potentially forward entropy to another contract
-    debug_print!("create_rn: forward entropy initiated");
     let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
-    debug_print!("create_rn: forward entropy done");
     let messages = cosmos_msg_fwd_entropy.unwrap_or_else(|| vec![]);
-    debug_print!("create_rn: messages unwrapped");
 
     Ok(HandleResponse {
         messages: messages,
@@ -297,7 +253,7 @@ pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
     debug_print!("fulfill_rn: initiated");
     // change seed
     let entropy = format!("{:?} {:?}", &env.message, &purpose); 
-    let _new_seed = change_seed(deps, &env, entropy)?;
+    let _new_seed = change_seed(deps, &env, &entropy)?;
     debug_print!("fulfill_rn: seed changed");
 
     // read from RN storage
@@ -341,7 +297,7 @@ pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
     debug_print!("fulfill_rn: usr_info entry removed");
 
     // transmit msg: to receiver (to a receive_transmit_rn handle function)
-    let receive_f_rn_msg = ReceiveFRnHandleMsg::ReceiveFRn {
+    let receive_f_rn_msg = InterContractHandle::ReceiveFRn {
         rn: usr_info.usr_rn,
         cb_msg: usr_info.usr_cb_msg,
         purpose: key.purpose,
@@ -354,8 +310,18 @@ pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
     )?;
     debug_print!("fulfill_rn: cosmos_msg created");
 
+    //Potentially forward entropy to another contract
+    let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
+
+    // create multiple messages
+    let mut messages = vec![cosmos_msg];
+    match cosmos_msg_fwd_entropy {
+        Some(mut i) => messages.append(&mut i),
+        None => (),
+    };
+
     Ok(HandleResponse {
-        messages: vec![cosmos_msg],
+        messages: messages,
         log: vec![],
         data: None
     })
@@ -615,7 +581,7 @@ fn forward_entropy<S: Storage, A: Api, Q:Querier, T:std::fmt::Debug>(
         let entropy_hashed_full = &sha2::Sha256::digest(format!("{:?}", &entropy).as_bytes());
         // forward a String of the first 32 bits; saves a bit of gas vs sending the whole 256bit String:
         let entropy_hashed = &entropy_hashed_full.as_slice()[0..4]; 
-        let donate_entropy_msg = DonateEntropyMsg::DonateEntropy {
+        let donate_entropy_msg = InterContractHandle::DonateEntropy {
             entropy: format!("{:?}", &entropy_hashed),
         };
         debug_print!("entropy String forwarded: {:?}", entropy_hashed);
@@ -647,7 +613,7 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     msg: QueryMsg,
 ) -> QueryResult {  // StdResult<Binary> , QueryResult
     let response = match msg {
-        QueryMsg::QueryConfig {what} => try_query_config(deps, what), 
+        QueryMsg::QueryConfig { } => try_query_config(deps), 
         _ => authenticated_queries(deps, msg),
    };
    pad_query_result(response, BLOCK_SIZE)
@@ -658,7 +624,6 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
 /// before (meant to be only for other scrt-rng contracts)
 pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
-    what: u32
 ) -> QueryResult {
     // let seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
     let idx: u32 = idx_read(&deps.storage).load()?;
@@ -673,17 +638,16 @@ pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
     let permittedvk_human = humanize_vec(deps, permittedvk.addrs)?;
     let vklog_human = humanize_vec(deps, vklog.addrs)?;
 
-    match what {
-        // 0 => return to_binary(&format!("seed: {:?}", seed.seed)),  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION//////
-        1 => return to_binary(&format!("created rns via option 2: {:}", idx)), 
-        2 => return to_binary(&format!("forward entropy?: {:}", entrp_chk.forw_entropy_check)),
-        3 => return to_binary(&format!("forward entropy hash: {:?}", configfw.forw_entropy_to_hash)),
-        4 => return to_binary(&format!("forward entropy addr: {:?}", configfw.forw_entropy_to_addr)),
-        5 => return to_binary(&format!("admin address: {:?}", admin_human)),
-        6 => return to_binary(&format!("addresses that have been authenticated to generate VK: {:?}", permittedvk_human)),
-        7 => return to_binary(&format!("address that have generated VK before: {:?}", vklog_human)),
-        _ => return Err(StdError::generic_err("invalid number. Try 0-7"))
-    };
+    to_binary(&QueryAnswer::ContractConfig {
+        // seed: seed.seed, //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION ! !
+        idx: idx,
+        forw_entropy: entrp_chk.forw_entropy_check,
+        fwd_entropy_hash: configfw.forw_entropy_to_hash,
+        fwd_entropy_addr: configfw.forw_entropy_to_addr,
+        admin: admin_human,
+        vk_perm_addr: permittedvk_human,
+        vk_gen_addr: vklog_human,
+    })
 }
 
 fn humanize_vec<S: Storage, A: Api, Q: Querier>(
@@ -719,7 +683,7 @@ fn authenticated_queries<S: Storage, A: Api, Q: Querier>(
             key.check_viewing_key(&[0u8; VIEWING_KEY_SIZE]);
         } else if key.check_viewing_key(expected_key.unwrap().as_slice()) {
             return match msg {
-                QueryMsg::AuthQuery {addr, entropy, ..} => try_authquery(&deps, entropy, &addr),
+                QueryMsg::QueryRn {addr, entropy, ..} => try_query_rn(&deps, entropy, &addr),
                 _ => panic!("This query type does not require authentication"),
             };
         }
@@ -728,7 +692,7 @@ fn authenticated_queries<S: Storage, A: Api, Q: Querier>(
     Err(StdError::unauthorized())
 }
 
-fn try_authquery<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
+fn try_query_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(
     deps: &Extern<S, A, Q>,
     entropy: T,
     _addr: &HumanAddr,
@@ -765,7 +729,7 @@ mod tests {
     // use std::fmt::Result;
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env};
-    use cosmwasm_std::{coins, from_binary}; 
+    use cosmwasm_std::{coins}; 
 
     #[test]
     fn callback_rn_changes_rn() {
@@ -849,48 +813,5 @@ mod tests {
 
         assert_eq!(seed1.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
         assert_ne!(seed2.seed, [152, 161, 137, 248, 53, 129, 159, 79, 42, 186, 18, 209, 76, 173, 161, 91, 215, 133, 46, 162, 93, 212, 37, 67, 113, 10, 89, 255, 214, 195, 159, 14]);
-    }
-
-    #[test]
-    fn admin_access_works() {
-        let mut deps = mock_dependencies(20, &coins(2, "token"));
-
-        let env = mock_env("creator", &coins(2, "token"));
-        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed string here")};
-        let _res = init(&mut deps, env, msg).unwrap();
-
-        let msg0 = QueryMsg::QueryConfig {what: 2};
-        let res0 = &query(&mut deps, msg0).unwrap();
-        let env = mock_env("creator", &coins(0, "token"));
-        let msg1 = HandleMsg::ConfigureFwd {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
-        let res1 = &handle(&mut deps, env, msg1);
-        let msg2 = QueryMsg::QueryConfig {what: 2};
-        let res2 = &query(&mut deps, msg2).unwrap();
-
-        assert_eq!(from_binary::<String>(&res0).unwrap(), String::from("forward entropy?: false"));
-        assert_eq!(res1.is_ok(), true);
-        assert_eq!(from_binary::<String>(&res2).unwrap(), String::from("forward entropy?: true"));
-    }
-
-    #[test]
-    fn admin_access_denied() {
-        let mut deps = mock_dependencies(20, &coins(2, "token"));
-
-        let env = mock_env("creator", &coins(2, "token"));
-        let msg = InitMsg {initseed: String::from("initseed input String"), prng_seed: String::from("seed string here")};
-        let _res = init(&mut deps, env, msg).unwrap();
-
-        let msg0 = QueryMsg::QueryConfig {what: 2};
-        let res0 = &query(&mut deps, msg0).unwrap();
-        let env = mock_env("RN user", &coins(0, "token"));
-        let msg1 = HandleMsg::ConfigureFwd {forw_entropy: true, forw_entropy_to_hash: vec![String::from("hash")], forw_entropy_to_addr: vec![String::from("addr")]};
-        let res1 = &handle(&mut deps, env, msg1);
-        let msg2 = QueryMsg::QueryConfig {what: 2};
-        let res2 = &query(&mut deps, msg2).unwrap();
-
-        assert_eq!(from_binary::<String>(&res0).unwrap(), String::from("forward entropy?: false"));
-        // assert_eq!(res1.as_ref().err().unwrap(), &StdError::generic_err("This is an admin function"));
-        assert!(res1.is_err());
-        assert_eq!(res0, res2);
     }
 }

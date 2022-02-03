@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "QueryAnswer",
+  "description": "Responses from query function",
+  "anyOf": [
+    {
+      "type": "object",
+      "required": [
+        "rn_output"
+      ],
+      "properties": {
+        "rn_output": {
+          "type": "object",
+          "required": [
+            "rn"
+          ],
+          "properties": {
+            "rn": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0.0
+              },
+              "maxItems": 32,
+              "minItems": 32
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "Allows anyone to query the current configuration of the contract",
+      "type": "object",
+      "required": [
+        "contract_config"
+      ],
+      "properties": {
+        "contract_config": {
+          "type": "object",
+          "required": [
+            "admin",
+            "forw_entropy",
+            "fwd_entropy_addr",
+            "fwd_entropy_hash",
+            "idx",
+            "vk_gen_addr",
+            "vk_perm_addr"
+          ],
+          "properties": {
+            "admin": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/HumanAddr"
+              }
+            },
+            "forw_entropy": {
+              "type": "boolean"
+            },
+            "fwd_entropy_addr": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "fwd_entropy_hash": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "idx": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "vk_gen_addr": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/HumanAddr"
+              }
+            },
+            "vk_perm_addr": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/HumanAddr"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "HumanAddr": {
+      "type": "string"
+    }
+  }
+}
