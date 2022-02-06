@@ -6,12 +6,15 @@ use std::any::type_name;
 use std::convert::TryInto;
 use secret_toolkit::serialization::{Bincode2, Serde};
 use secret_toolkit::storage::{TypedStore, TypedStoreMut};
-use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage, ReadonlySingleton, Singleton, singleton, singleton_read};
+use cosmwasm_storage::{PrefixedStorage, ReadonlyPrefixedStorage};  // ReadonlySingleton, Singleton, singleton, singleton_read
 use crate::{viewing_key::ViewingKey}; 
 
 pub const SEED_KEY: &[u8] = b"seed";
 pub const PRNG_KEY: &[u8] = b"prng";
-pub static IDX_KEY: &[u8] = b"index"; 
+pub static IDX_KEY0: &[u8] = b"index0"; // option 0
+pub static IDX_KEY1: &[u8] = b"index1"; // option 1
+pub static IDX_KEY2A: &[u8] = b"index2a"; // option 2a
+pub static IDX_KEY2B: &[u8] = b"index2b"; // option 2b
 pub const RN_STOR_KEY: &[u8] = b"rnstorage";
 pub const ENTRP_CHK_KEY: &[u8] = b"entropycheck";
 pub const FW_CONFIG_KEY: &[u8] = b"config"; // forward entropy config 
@@ -96,15 +99,6 @@ pub fn remove_rn_store<S: Storage>(store: &mut S, key: &RnStorKy) -> StdResult<(
     Ok(usr_rn_store.remove(key_bin))
 }
 
-// index read and write
-pub fn idx_write<S: Storage>(storage: &mut S) -> Singleton<S, u32> {
-    singleton(storage, IDX_KEY)
-}
-
-pub fn idx_read<S: Storage>(storage: &S) -> ReadonlySingleton<S, u32> {
-    singleton_read(storage, IDX_KEY)
-}
-
 // Viewing key for authenticated queries
 pub fn write_viewing_key<S: Storage>(store: &mut S, owner: &CanonicalAddr, key: &ViewingKey) {
     let mut user_key_store = PrefixedStorage::new(PREFIX_VIEWING_KEY, store);
@@ -116,7 +110,7 @@ pub fn read_viewing_key<S: Storage>(store: &S, owner: &CanonicalAddr) -> Option<
     user_key_store.get(owner.as_slice())
 }
 
-// State for RNG seed and config
+// State for various storage structs
 pub fn load_state<T: DeserializeOwned, S: ReadonlyStorage>(storage: &S, key: &[u8]) -> StdResult<T> {
     Bincode2::deserialize(
         &storage

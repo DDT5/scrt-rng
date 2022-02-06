@@ -34,7 +34,7 @@ build-mainnet-reproducible:
 	docker run --rm -v "$$(pwd)":/contract \
 		--mount type=volume,source="$$(basename "$$(pwd)")_cache",target=/contract/target \
 		--mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
-		enigmampc/secret-contract-optimizer:1.0.3
+		enigmampc/secret-contract-optimizer:1.0.5
 
 .PHONY: compress-wasm
 compress-wasm:
@@ -53,14 +53,14 @@ start-server: # CTRL+C to stop
 	docker run -it --rm \
 		-p 26657:26657 -p 26656:26656 -p 1317:1317 \
 		-v $$(pwd):/root/code \
-		--name secretdev enigmampc/secret-network-sw-dev:v1.0.4-3
+		--name secretdev enigmampc/secret-network-sw-dev:v1.0.4-5
 
 # This relies on running `start-server` in another console
 # You can run other commands on the secretcli inside the dev image
 # by using `docker exec secretdev secretcli`.
 .PHONY: store-contract-local
 store-contract-local:
-	docker exec secretdev secretcli tx compute store -y --from a --gas 1000000 /root/code/contract.wasm.gz
+	docker exec secretdev secretcli tx compute store -y --from a --gas 4000000 /root/code/contract.wasm.gz
 
 .PHONY: clean
 clean:

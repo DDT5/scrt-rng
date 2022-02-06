@@ -122,7 +122,7 @@ pub enum QueryAnswer {
     /// Allows anyone to query the current configuration of the contract
     ContractConfig {
         // seed: [u8; 32],  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION!
-        idx: u32,  // count of created rns via option 2
+        idx: [u32; 4],  // count of txs with options 0, 1 and 2 (create: a and fulfill: b)
         forw_entropy: bool, // true=set to forward entropy
         fwd_entropy_hash: Vec<String>, // forward entropy hash
         fwd_entropy_addr: Vec<String>, // forward entropy addr

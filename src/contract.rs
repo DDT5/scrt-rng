@@ -8,8 +8,8 @@ use cosmwasm_std::{
 use crate::msg::{InitMsg, HandleMsg, HandleAnswer, InterContractHandle, QueryMsg, QueryAnswer}; 
 use crate::state::{
     Seed, EntrpChk, AuthAddrs, ForwEntrpConfig, PrngSeed, RnStorKy, RnStorVl,
-    load_state, save_state, write_viewing_key, read_viewing_key, idx_read, idx_write, write_rn_store, read_rn_store, remove_rn_store,
-    SEED_KEY, FW_CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, PERMITTED_VK, VK_LOG,
+    load_state, save_state, write_viewing_key, read_viewing_key, write_rn_store, read_rn_store, remove_rn_store,
+    SEED_KEY, FW_CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, PERMITTED_VK, VK_LOG, IDX_KEY0, IDX_KEY1, IDX_KEY2A, IDX_KEY2B,
 };  
 use crate::viewing_key::{ViewingKey}; 
 use crate::viewing_key::VIEWING_KEY_SIZE;
@@ -72,7 +72,10 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     save_state(&mut deps.storage, VK_LOG, &empty_vec)?;
 
     // initialize cb_msg index (pointer) to 0
-    idx_write(&mut deps.storage).save(&0u32)?;
+    save_state(&mut deps.storage, IDX_KEY0, &0u32)?;
+    save_state(&mut deps.storage, IDX_KEY1, &0u32)?;
+    save_state(&mut deps.storage, IDX_KEY2A, &0u32)?;
+    save_state(&mut deps.storage, IDX_KEY2B, &0u32)?;
 
     Ok(InitResponse::default())
 }
@@ -137,6 +140,10 @@ pub fn try_request_rn<S:Storage, A:Api, Q:Querier>(
     let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
     let messages = cosmos_msg_fwd_entropy.unwrap_or_else(|| vec![]);
 
+    // add to count
+    let idx: u32 = load_state(&deps.storage, IDX_KEY0)?;
+    save_state(&mut deps.storage, IDX_KEY0,&(&idx+1))?;
+
     Ok(HandleResponse {
         messages: messages,
         log: vec![],
@@ -185,6 +192,10 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
         None => (),
     };
 
+    // add to count
+    let idx: u32 = load_state(&deps.storage, IDX_KEY1)?;
+    save_state(&mut deps.storage, IDX_KEY1,&(&idx+1))?;
+
     Ok(HandleResponse {
         messages: messages,
         log: vec![],
@@ -228,8 +239,8 @@ pub fn try_create_rn<S: Storage, A: Api, Q: Querier>(
 
 
     // add to count
-    let idx = idx_read(&deps.storage).load()?;
-    idx_write(&mut deps.storage).save(&(&idx+1))?;
+    let idx: u32 = load_state(&deps.storage, IDX_KEY2A)?;
+    save_state(&mut deps.storage, IDX_KEY2A,&(&idx+1))?;
 
     //Potentially forward entropy to another contract
     let cosmos_msg_fwd_entropy = forward_entropy(deps, &env, &entropy)?;
@@ -319,6 +330,10 @@ pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
         Some(mut i) => messages.append(&mut i),
         None => (),
     };
+
+    // add to count
+    let idx: u32 = load_state(&deps.storage, IDX_KEY2B)?;
+    save_state(&mut deps.storage, IDX_KEY2B,&(&idx+1))?;
 
     Ok(HandleResponse {
         messages: messages,
@@ -626,7 +641,10 @@ pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
 ) -> QueryResult {
     // let seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
-    let idx: u32 = idx_read(&deps.storage).load()?;
+    let idx0: u32 = load_state(&deps.storage,IDX_KEY0)?;
+    let idx1: u32 = load_state(&deps.storage,IDX_KEY1)?;
+    let idx2a: u32 = load_state(&deps.storage,IDX_KEY2A)?;
+    let idx2b: u32 = load_state(&deps.storage,IDX_KEY2B)?;
     let admins: AuthAddrs = load_state(&deps.storage, ADMIN_KEY)?;
     let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
     let configfw: ForwEntrpConfig = load_state(&deps.storage, FW_CONFIG_KEY)?;
@@ -640,7 +658,7 @@ pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
 
     to_binary(&QueryAnswer::ContractConfig {
         // seed: seed.seed, //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION ! !
-        idx: idx,
+        idx: [idx0, idx1, idx2a, idx2b],
         forw_entropy: entrp_chk.forw_entropy_check,
         fwd_entropy_hash: configfw.forw_entropy_to_hash,
         fwd_entropy_addr: configfw.forw_entropy_to_addr,
