@@ -58,6 +58,25 @@
     {
       "type": "object",
       "required": [
+        "configure_stats"
+      ],
+      "properties": {
+        "configure_stats": {
+          "type": "object",
+          "required": [
+            "view"
+          ],
+          "properties": {
+            "view": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "required": [
         "add_admin"
       ],
       "properties": {

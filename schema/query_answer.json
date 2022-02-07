@@ -43,7 +43,7 @@
             "forw_entropy",
             "fwd_entropy_addr",
             "fwd_entropy_hash",
-            "idx",
+            "usage_stats",
             "vk_gen_addr",
             "vk_perm_addr"
           ],
@@ -69,10 +69,8 @@
                 "type": "string"
               }
             },
-            "idx": {
-              "type": "integer",
-              "format": "uint32",
-              "minimum": 0.0
+            "usage_stats": {
+              "type": "boolean"
             },
             "vk_gen_addr": {
               "type": "array",
@@ -85,6 +83,46 @@
               "items": {
                 "$ref": "#/definitions/HumanAddr"
               }
+            }
+          }
+        }
+      }
+    },
+    {
+      "description": "count of txs with options 0, 1 and 2 (create: a and fulfill: b)",
+      "type": "object",
+      "required": [
+        "usage_stats"
+      ],
+      "properties": {
+        "usage_stats": {
+          "type": "object",
+          "required": [
+            "callback_rn",
+            "create_rn",
+            "fulfill_rn",
+            "request_rn"
+          ],
+          "properties": {
+            "callback_rn": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "create_rn": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "fulfill_rn": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "request_rn": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
             }
           }
         }

@@ -40,6 +40,17 @@
           "type": "object"
         }
       }
+    },
+    {
+      "type": "object",
+      "required": [
+        "query_stats"
+      ],
+      "properties": {
+        "query_stats": {
+          "type": "object"
+        }
+      }
     }
   ],
   "definitions": {
