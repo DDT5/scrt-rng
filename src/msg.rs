@@ -33,6 +33,7 @@ pub enum HandleMsg {
         forw_entropy_to_addr: Vec<String>,
     },
     ConfigureAuth {add: String},
+    ConfigureStats {view: bool},
     AddAdmin {add: String},
     RemoveAdmin {remove: String},
 
@@ -101,6 +102,7 @@ impl HandleCallback for InterContractHandle {
 pub enum QueryMsg {
     QueryRn {entropy: String, addr: HumanAddr, vk: String},
     QueryConfig { },
+    QueryStats { },
 }
 
 impl QueryMsg {
@@ -122,12 +124,19 @@ pub enum QueryAnswer {
     /// Allows anyone to query the current configuration of the contract
     ContractConfig {
         // seed: [u8; 32],  //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION!
-        idx: [u32; 4],  // count of txs with options 0, 1 and 2 (create: a and fulfill: b)
+        usage_stats: bool, // true=UsageStats viewable, false: not viewable
         forw_entropy: bool, // true=set to forward entropy
         fwd_entropy_hash: Vec<String>, // forward entropy hash
         fwd_entropy_addr: Vec<String>, // forward entropy addr
         admin: Vec<HumanAddr>, // admin addresses
         vk_perm_addr: Vec<HumanAddr>, // addresses that have been authenticated to generate VK
         vk_gen_addr: Vec<HumanAddr>, // address that have generated VK before
+    },
+    /// count of txs with options 0, 1 and 2 (create: a and fulfill: b)
+    UsageStats {
+        request_rn: u64,
+        callback_rn: u64,
+        create_rn: u64,
+        fulfill_rn: u64,
     }
 }

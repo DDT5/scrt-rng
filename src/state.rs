@@ -18,6 +18,7 @@ pub static IDX_KEY2B: &[u8] = b"index2b"; // option 2b
 pub const RN_STOR_KEY: &[u8] = b"rnstorage";
 pub const ENTRP_CHK_KEY: &[u8] = b"entropycheck";
 pub const FW_CONFIG_KEY: &[u8] = b"config"; // forward entropy config 
+pub const USAGE_STATS_KEY: &[u8] = b"usage stats";
 pub const ADMIN_KEY: &[u8] = b"admin";
 pub const PREFIX_VIEWING_KEY: &[u8] = b"viewingkey";
 pub const PERMITTED_VK: &[u8] = b"permittedvk"; // other contracts within the protocol (eg: scrt-rng2) can generate viewing keys

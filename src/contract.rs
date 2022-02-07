@@ -9,7 +9,8 @@ use crate::msg::{InitMsg, HandleMsg, HandleAnswer, InterContractHandle, QueryMsg
 use crate::state::{
     Seed, EntrpChk, AuthAddrs, ForwEntrpConfig, PrngSeed, RnStorKy, RnStorVl,
     load_state, save_state, write_viewing_key, read_viewing_key, write_rn_store, read_rn_store, remove_rn_store,
-    SEED_KEY, FW_CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, PERMITTED_VK, VK_LOG, IDX_KEY0, IDX_KEY1, IDX_KEY2A, IDX_KEY2B,
+    SEED_KEY, FW_CONFIG_KEY, ADMIN_KEY, ENTRP_CHK_KEY, PRNG_KEY, PERMITTED_VK, VK_LOG, 
+    USAGE_STATS_KEY, IDX_KEY0, IDX_KEY1, IDX_KEY2A, IDX_KEY2B,
 };  
 use crate::viewing_key::{ViewingKey}; 
 use crate::viewing_key::VIEWING_KEY_SIZE;
@@ -72,10 +73,11 @@ pub fn init<S: Storage, A: Api, Q: Querier>(
     save_state(&mut deps.storage, VK_LOG, &empty_vec)?;
 
     // initialize cb_msg index (pointer) to 0
-    save_state(&mut deps.storage, IDX_KEY0, &0u32)?;
-    save_state(&mut deps.storage, IDX_KEY1, &0u32)?;
-    save_state(&mut deps.storage, IDX_KEY2A, &0u32)?;
-    save_state(&mut deps.storage, IDX_KEY2B, &0u32)?;
+    save_state(&mut deps.storage, USAGE_STATS_KEY, &true)?;
+    save_state(&mut deps.storage, IDX_KEY0, &0u64)?;
+    save_state(&mut deps.storage, IDX_KEY1, &0u64)?;
+    save_state(&mut deps.storage, IDX_KEY2A, &0u64)?;
+    save_state(&mut deps.storage, IDX_KEY2B, &0u64)?;
 
     Ok(InitResponse::default())
 }
@@ -112,6 +114,7 @@ pub fn handle<S: Storage, A: Api, Q: Querier>(
             forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr,
         } => try_configure_fwd(deps, env, forw_entropy, forw_entropy_to_hash, forw_entropy_to_addr),
         HandleMsg::ConfigureAuth {add} => try_configure_auth(deps, env, add),
+        HandleMsg::ConfigureStats {view} => try_configure_usage_stats(deps, env, view),
         HandleMsg::GenerateViewingKey {entropy, receiver_code_hash, .. } => try_generate_viewing_key(deps, env, entropy, receiver_code_hash),
 
         HandleMsg::AddAdmin {add} => try_add_admin(deps, env, add),
@@ -141,7 +144,7 @@ pub fn try_request_rn<S:Storage, A:Api, Q:Querier>(
     let messages = cosmos_msg_fwd_entropy.unwrap_or_else(|| vec![]);
 
     // add to count
-    let idx: u32 = load_state(&deps.storage, IDX_KEY0)?;
+    let idx: u64 = load_state(&deps.storage, IDX_KEY0)?;
     save_state(&mut deps.storage, IDX_KEY0,&(&idx+1))?;
 
     Ok(HandleResponse {
@@ -193,7 +196,7 @@ pub fn try_callback_rn<S: Storage, A: Api, Q: Querier, T:std::fmt::Debug>(   //
     };
 
     // add to count
-    let idx: u32 = load_state(&deps.storage, IDX_KEY1)?;
+    let idx: u64 = load_state(&deps.storage, IDX_KEY1)?;
     save_state(&mut deps.storage, IDX_KEY1,&(&idx+1))?;
 
     Ok(HandleResponse {
@@ -239,7 +242,7 @@ pub fn try_create_rn<S: Storage, A: Api, Q: Querier>(
 
 
     // add to count
-    let idx: u32 = load_state(&deps.storage, IDX_KEY2A)?;
+    let idx: u64 = load_state(&deps.storage, IDX_KEY2A)?;
     save_state(&mut deps.storage, IDX_KEY2A,&(&idx+1))?;
 
     //Potentially forward entropy to another contract
@@ -332,7 +335,7 @@ pub fn try_fulfill_rn<S: Storage, A: Api, Q: Querier>(
     };
 
     // add to count
-    let idx: u32 = load_state(&deps.storage, IDX_KEY2B)?;
+    let idx: u64 = load_state(&deps.storage, IDX_KEY2B)?;
     save_state(&mut deps.storage, IDX_KEY2B,&(&idx+1))?;
 
     Ok(HandleResponse {
@@ -407,6 +410,23 @@ fn try_configure_auth<S: Storage, A: Api, Q: Querier>(
     let mut auth_vec: AuthAddrs = load_state(&mut deps.storage, PERMITTED_VK)?;    
     auth_vec.addrs.extend(deps.api.canonical_address(&HumanAddr(add)));
     save_state(&mut deps.storage, PERMITTED_VK, &auth_vec.addrs)?;
+
+    Ok(HandleResponse::default())
+}
+
+/// Configuration to determine if usage stats are viewable. Admins can change this config,
+/// but do not have privileged access. Usage stats (if set to `true`) are publicly viewable 
+fn try_configure_usage_stats<S: Storage, A: Api, Q: Querier>(
+    deps: &mut Extern<S, A, Q>,
+    env: Env,
+    view: bool,
+) -> StdResult<HandleResponse> {
+    // check if admin
+    let admins_vec: AuthAddrs = load_state(&mut deps.storage, ADMIN_KEY)?;
+    check_auth(deps, &env, &admins_vec)?;
+
+    // save config
+    save_state(&mut deps.storage, USAGE_STATS_KEY, &view)?;
 
     Ok(HandleResponse::default())
 }
@@ -628,7 +648,8 @@ pub fn query<S: Storage, A: Api, Q: Querier>(
     msg: QueryMsg,
 ) -> QueryResult {  // StdResult<Binary> , QueryResult
     let response = match msg {
-        QueryMsg::QueryConfig { } => try_query_config(deps), 
+        QueryMsg::QueryConfig { } => try_query_config(deps),
+        QueryMsg::QueryStats { } => try_query_stats(deps),
         _ => authenticated_queries(deps, msg),
    };
    pad_query_result(response, BLOCK_SIZE)
@@ -641,10 +662,7 @@ pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
     deps: &Extern<S, A, Q>,
 ) -> QueryResult {
     // let seed: Seed = load_state(&deps.storage, SEED_KEY)?; 
-    let idx0: u32 = load_state(&deps.storage,IDX_KEY0)?;
-    let idx1: u32 = load_state(&deps.storage,IDX_KEY1)?;
-    let idx2a: u32 = load_state(&deps.storage,IDX_KEY2A)?;
-    let idx2b: u32 = load_state(&deps.storage,IDX_KEY2B)?;
+    let usage_stats = load_state(&deps.storage, USAGE_STATS_KEY)?;
     let admins: AuthAddrs = load_state(&deps.storage, ADMIN_KEY)?;
     let entrp_chk: EntrpChk = load_state(&deps.storage, ENTRP_CHK_KEY)?;
     let configfw: ForwEntrpConfig = load_state(&deps.storage, FW_CONFIG_KEY)?;
@@ -658,13 +676,38 @@ pub fn try_query_config<S: Storage, A: Api, Q: Querier>(
 
     to_binary(&QueryAnswer::ContractConfig {
         // seed: seed.seed, //FOR DEBUGGING --- MUST REMOVE FOR FINAL IMPLEMENTATION ! !
-        idx: [idx0, idx1, idx2a, idx2b],
+        usage_stats: usage_stats,
         forw_entropy: entrp_chk.forw_entropy_check,
         fwd_entropy_hash: configfw.forw_entropy_to_hash,
         fwd_entropy_addr: configfw.forw_entropy_to_addr,
         admin: admin_human,
         vk_perm_addr: permittedvk_human,
         vk_gen_addr: vklog_human,
+    })
+}
+
+/// If set to viewable, anyone can view the cumulative number of times each RNG function is used
+/// If set to not viewable, no one can view this
+pub fn try_query_stats<S: Storage, A: Api, Q: Querier>(
+    deps: &Extern<S, A, Q>,
+) -> QueryResult {
+    // check if viewable set to `true` 
+    let usage_stats = load_state(&deps.storage, USAGE_STATS_KEY)?;
+    if let false = usage_stats {
+        return Err(StdError::generic_err("usage stats configured to be not viewable"));
+    }
+
+    // load usage stats
+    let idx0: u64 = load_state(&deps.storage,IDX_KEY0)?;
+    let idx1: u64 = load_state(&deps.storage,IDX_KEY1)?;
+    let idx2a: u64 = load_state(&deps.storage,IDX_KEY2A)?;
+    let idx2b: u64 = load_state(&deps.storage,IDX_KEY2B)?;
+
+    to_binary(&QueryAnswer::UsageStats {
+        request_rn: idx0,
+        callback_rn: idx1,
+        create_rn: idx2a,
+        fulfill_rn: idx2b,
     })
 }
 

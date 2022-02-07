@@ -439,7 +439,16 @@ function test_admin_func() {
     txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":true,"forw_entropy_to_hash":["'"$HASH2"'","'"$HASH3"'"],"forw_entropy_to_addr":["'"$CONTRACT2"'","'"$CONTRACT3"'"]}}' --from b -y)"
     wait_for_compute_tx $txh "waiting for tx";
     fwd_bool="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.forw_entropy')"
+    echo "test_admin_func: new admin can change config (fwd entropy)"
     assert_eq $fwd_bool "true"
+    assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
+
+    # New admin can change config (usage stats viewability to false)
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_stats":{"view":false}}' --from b -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    stats_bool="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.contract_config.usage_stats')"
+    echo "test_admin_func: new admin can change config (view stats)"
+    assert_eq $stats_bool "false"
     assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
     # Non-admin cannot add new admin
@@ -460,7 +469,9 @@ function test_admin_func() {
     assert_eq "$(secretcli q compute tx $txh | jq '.output_error[]')" "" 
 
     # Creator can change config: Change back settings to default
-    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":false,"forw_entropy_to_hash":[],"forw_entropy_to_addr":[]}}' --from a -y)"
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_stats":{"view":true}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_fwd":{"forw_entropy":false,"forw_entropy_to_hash":[],"forw_entropy_to_addr":[]}}' --from a -y)";
     wait_for_compute_tx $txh "waiting for tx";
     config1="$(secretcli q compute query $CONTRACT '{"query_config": {}}' | jq '.')"
     echo "test_admin_func: config back to original"
@@ -587,7 +598,59 @@ function test_auth_queries() {
     log_gas $txh0 "user-authenticated-query_rn"
 }
 
+# ------------------------------------------------------------------------
+# Usage stats
+# ------------------------------------------------------------------------
 
+function test_usage_stats() {
+    callbackmsg='message before RN'
+    callbackbinary="$(base64 <<< $callbackmsg)" 
+    cb_msg0_msg='message from user0'
+    cb_msg0="$(base64 <<< $cb_msg0_msg)";
+
+    # usage stats at beginning
+    stats0="$(secretcli q compute query $CONTRACT '{"query_stats": {}}' | jq '.usage_stats')"
+
+    # non-admin cannot change usage stats
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_stats":{"view":false}}' --from b -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    assert_eq "$(secretcli q compute tx $txh | jq -r '.output_error[].msg')" "This is an authenticated function" 
+
+    # usage stats increases as expected (option0: request_rn)
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"request_rn":{"entropy":"foo bar"}}' --from a --gas 400000 -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    stats1="$(secretcli q compute query $CONTRACT '{"query_stats": {}}' | jq '.usage_stats')"
+    assert_eq "$(echo $stats1 | jq '.request_rn')" $(("$(echo $stats0 | jq '.request_rn')" +1))
+
+    # usage stats increases as expected (option1: callback_rn)
+    txh="$(tx_of secretcli tx compute execute $USER '{"call_rn":{"entropy":"foo bar","cb_msg":"'"$callbackbinary"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from b --gas 400000 -y)"
+    wait_for_compute_tx $txh "waiting for tx"
+    stats2="$(secretcli q compute query $CONTRACT '{"query_stats": {}}' | jq '.usage_stats')"
+    assert_eq "$(echo $stats2 | jq '.callback_rn')" $(("$(echo $stats0 | jq '.callback_rn')" +1))  # <----
+
+    # usage stats increases as expected (option2a: create_rn)
+    txh="$(tx_of secretcli tx compute execute $USER '{"trigger_create_rn":{"entropy":"foo bar", "cb_msg":"'"$cb_msg0"'", "receiver_code_hash":"'"$USER_H"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 400000 -y)"
+    wait_for_compute_tx $txh "waiting for tx"
+    stats3="$(secretcli q compute query $CONTRACT '{"query_stats": {}}' | jq '.usage_stats')"
+    assert_eq "$(echo $stats3 | jq '.create_rn')" $(("$(echo $stats0 | jq '.create_rn')" +1))
+
+    # usage stats increases as expected (option2b: fulfill_rn)
+    txh="$(tx_of secretcli tx compute execute $USER '{"trigger_fulfill_rn":{"creator_addr":"'"$USER"'","receiver_code_hash":"'"$USER_H"'","rng_hash":"'"$HASH"'","rng_addr":"'"$CONTRACT"'"}}' --from a --gas 400000 -y)"
+    wait_for_compute_tx $txh "waiting for tx"
+    stats4="$(secretcli q compute query $CONTRACT '{"query_stats": {}}' | jq '.usage_stats')"
+    assert_eq "$(echo $stats4 | jq '.fulfill_rn')" $(("$(echo $stats0 | jq '.fulfill_rn')" +1))
+
+    # admin can change usage stats to hidden
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_stats":{"view":false}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+    # view usage stats no longer viewable when hidden
+    stats5="$(secretcli q compute query $CONTRACT '{"query_stats": {}}' | jq '.usage_stats[]')"
+    assert_eq $stats5 ""
+
+    # set usage stats back to true
+    txh="$(tx_of secretcli tx compute execute $CONTRACT '{"configure_stats":{"view":true}}' --from a -y)"
+    wait_for_compute_tx $txh "waiting for tx";
+}
 
 # ########################################################################
 # Execute tests
@@ -599,6 +662,7 @@ test_op2
 test_admin_func
 test_fwd_entropy
 test_auth_queries
+test_usage_stats
 
 # Print gas usage
 echo ""; echo "$gas_log"
